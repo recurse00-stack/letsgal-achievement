@@ -17,7 +17,7 @@
 
 ## 安装和启用
 
-1. 在 Studio 的个性化面板选择“导入扩展”，安装成品使用“复制导入”，持续开发使用“关联源码工程”。选择 achievement-eded54 文件夹。
+1. 在 Studio 的个性化面板选择“导入扩展”，安装成品使用“复制导入”，持续开发使用“关联源码工程”。选择 mixing-entropy.achievement 文件夹。
 2. 将“成就”加入当前项目并启用。
 3. 在官方数据表面板找到“成就激活记录”依赖。缺少状态表时，使用扩展提供的模板创建并绑定，模板会设置为 profile（跨存档共享），含 achievementId（文本）、active（布尔）两列，初始表为空。
 4. 已有旧测试表绑定时，先保留原表，再创建符合模板的 profile 表并改绑。更新扩展不会把旧表策略静默改掉；session 临时表不用于正式保存。
@@ -99,7 +99,7 @@
 
 默认页面已包含三个可隐藏按钮；旧项目自制页若要开放横向切换，添加横向按钮即可，无需重做卡片模板。缺少 achievement-list 标识符时不接管页面；直接使用官方“显示界面”只展示作者原页面，不会应用本模块的模式选择和横向适配。
 
-数据列表来源固定为 ext:achievement-eded54.entries。设置名称字段 name、说明字段 status、图片字段 icon。条目可用占位符：
+数据列表来源固定为 ext:mixing-entropy.achievement.entries。设置名称字段 name、说明字段 status、图片字段 icon。条目可用占位符：
 
 | 占位符 | 内容 |
 | --- | --- |
@@ -145,6 +145,6 @@
 
 ## AI 指南辅助安装
 
-运行 python tools/install-ai.py 默认只预览。在当前 Agent 有 letsgal-authoring 主技能时，配套知识安装到实际用户目录的 .letsgal-authoring/plugins/achievement-eded54/0.1.0；没有主技能时，才安装为独立 letsgal-plugin-achievement 技能。指定其它 Agent 可使用 --skills-root 与 --user-root。
+运行 python tools/install-ai.py 默认只预览。在当前 Agent 有 letsgal-authoring 主技能时，配套知识安装到实际用户目录的 .letsgal-authoring/plugins/mixing-entropy.achievement/0.1.0；没有主技能时，才安装为独立 letsgal-plugin-achievement 技能。指定其它 Agent 可使用 --skills-root 与 --user-root。
 
 确认预览目标后添加 --apply。相同内容重复执行不会覆盖；遇到同版本不同内容会停止并提示先比较保全。安装器不下载软件、不升级 Studio、不覆盖主技能。文件安装成功不等同于 Agent 已发现并使用技能。

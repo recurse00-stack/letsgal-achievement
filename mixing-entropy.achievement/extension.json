@@ -1,10 +1,10 @@
 {
-  "id": "achievement-eded54",
+  "id": "mixing-entropy.achievement",
   "name": "成就",
   "description": "最简成就：分级、图标名称、激活状态、自定义 UI 与浮现动画",
   "author": "mixing-entropy",
   "version": "0.1.0",
-  "entry": "dist/index.js",
+  "entry": "dist/index.mjs",
   "studioEntry": "dist/studio.js",
   "sdkVersion": "^2.8.0-beta.1",
   "dataDependencies": {

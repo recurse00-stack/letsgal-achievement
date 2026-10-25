@@ -8,7 +8,7 @@ class InstallerTests(unittest.TestCase):
  def tearDown(self):
   assert self.root.resolve().is_relative_to(self.base.resolve()) and self.root.resolve()!=self.base.resolve()
   shutil.rmtree(self.root)
- def do(self,**kw):return install(self.source,kw.get('plugin','achievement-eded54'),kw.get('version','0.1.0'),self.skills,self.user,kw.get('apply',True))
+ def do(self,**kw):return install(self.source,kw.get('plugin','mixing-entropy.achievement'),kw.get('version','0.1.0'),self.skills,self.user,kw.get('apply',True))
  def main(self):
   q=self.skills/'letsgal-authoring';q.mkdir(parents=True);(q/'SKILL.md').write_text('---\nname: letsgal-authoring\n---',encoding='utf-8')
  def test_preview_no_write(self):

@@ -8,7 +8,7 @@
 
 ## 下载与使用
 
-从 [Release](https://github.com/recurse00-stack/letsgal-achievement/releases/tag/v0.1.0) 下载 `achievement-eded54-0.1.0.zip`，在 Studio 中导入扩展并加入项目。需要源码、手册和 AI 指南时下载 `letsgal-achievement-0.1.0-bundle.zip`。
+从 [Release](https://github.com/recurse00-stack/letsgal-achievement/releases/tag/v0.1.0) 下载 `mixing-entropy.achievement-0.1.0.zip`，在 Studio 中导入扩展并加入项目。需要源码、手册和 AI 指南时下载 `letsgal-achievement-0.1.0-bundle.zip`。
 
 [中文使用说明](docs/USER-GUIDE.md) 包含配置成就、数据表绑定、剧情激活、编辑卡片、浏览方式及浮现动画。解压完整包后，也可以离线打开 `docs/USER-GUIDE.html`。
 
@@ -18,4 +18,4 @@
 
 [成就 AI 指南](ai/SKILL.md) 随完整包提供。运行 `python tools/install-ai.py` 预览安装，确认目标后添加 `--apply`。需要 LetsGal 通用创作指导时，另从 [LetsGal Authoring Kit](https://github.com/recurse00-stack/letsgal-authoring-kit/releases) 获取主 Skill。
 
-构建源码时先在 Studio 中同步官方 SDK 和 Studio UI Kit，再在 achievement-eded54 中执行 npm install、npm run check、npm test、npm run build。SDK 和 UI Kit 使用宿主提供的版本，不自行替换接口。运行代码和编辑期代码分别构建到 dist/index.js 与 dist/studio.js。
+构建源码时先在 Studio 中同步官方 SDK 和 Studio UI Kit，再在 mixing-entropy.achievement 中执行 npm install、npm run check、npm test、npm run build。SDK 和 UI Kit 使用宿主提供的版本，不自行替换接口。运行代码和编辑期代码分别构建到 dist/index.mjs 与 dist/studio.js。

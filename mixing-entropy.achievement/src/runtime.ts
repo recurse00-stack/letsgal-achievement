@@ -4,8 +4,8 @@ import { NotificationQueue, delay } from './notification-queue.ts';
 import { bindBrowseMode } from './browse-mode.ts';
 import { createHorizontalCards } from './horizontal-cards.ts';
 
-export const PAGE = '@achievement-eded54/achievements';
-export const POPUP = '@achievement-eded54/achievement-popup';
+export const PAGE = '@mixing-entropy.achievement/achievements';
+export const POPUP = '@mixing-entropy.achievement/achievement-popup';
 interface ViewSink {
   get(key: 'browseMode'): string;
   set(key: 'browseMode', value: string): void;
@@ -55,7 +55,7 @@ export class AchievementController {
   }
   private publish(definitions: ReturnType<typeof catalog>, records: ReturnType<typeof activations>): Entry[] {
     this.assertLive();
-    const result = entries(definitions, records).map(item => ({ ...item, icon: item.icon || 'extension-asset://achievement-eded54/assets/achievement.svg', frame: `extension-asset://achievement-eded54/assets/frame-${['bronze', 'silver', 'gold'].includes(item.levelId) ? item.levelId : 'neutral'}.svg` }));
+    const result = entries(definitions, records).map(item => ({ ...item, icon: item.icon || 'extension-asset://mixing-entropy.achievement/assets/achievement.svg', frame: `extension-asset://mixing-entropy.achievement/assets/frame-${['bronze', 'silver', 'gold'].includes(item.levelId) ? item.levelId : 'neutral'}.svg` }));
     this.sink.set('entries', result);
     return result;
   }

@@ -347,8 +347,8 @@ function createHorizontalCards(layout) {
     }
   };
 }
-const PAGE = "@achievement-eded54/achievements";
-const POPUP = "@achievement-eded54/achievement-popup";
+const PAGE = "@mixing-entropy.achievement/achievements";
+const POPUP = "@mixing-entropy.achievement/achievement-popup";
 const runs = /* @__PURE__ */ new WeakMap();
 function controller(ctx, sink) {
   const signal = ctx.flow.signal;
@@ -406,7 +406,7 @@ class AchievementController {
   }
   publish(definitions, records) {
     this.assertLive();
-    const result = entries(definitions, records).map((item) => ({ ...item, icon: item.icon || "extension-asset://achievement-eded54/assets/achievement.svg", frame: `extension-asset://achievement-eded54/assets/frame-${["bronze", "silver", "gold"].includes(item.levelId) ? item.levelId : "neutral"}.svg` }));
+    const result = entries(definitions, records).map((item) => ({ ...item, icon: item.icon || "extension-asset://mixing-entropy.achievement/assets/achievement.svg", frame: `extension-asset://mixing-entropy.achievement/assets/frame-${["bronze", "silver", "gold"].includes(item.levelId) ? item.levelId : "neutral"}.svg` }));
     this.sink.set("entries", result);
     return result;
   }
@@ -605,4 +605,4 @@ let AchievementExtension = _AchievementExtension;
 export {
   AchievementExtension as default
 };
-//# sourceMappingURL=index.js.map
+//# sourceMappingURL=index.mjs.map

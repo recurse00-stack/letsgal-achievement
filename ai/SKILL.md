@@ -1,6 +1,6 @@
 ---
 name: letsgal-plugin-achievement
-description: 配置 LetsGal 成就插件 achievement-eded54 的等级、定义、方法块、成就页和浮现界面；仅处理已安装的这个插件。
+description: 配置 LetsGal 成就插件 mixing-entropy.achievement 的等级、定义、方法块、成就页和浮现界面；仅处理已安装的这个插件。
 metadata:
   version: 0.1.0
   channel: beta

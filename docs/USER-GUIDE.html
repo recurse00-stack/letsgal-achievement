@@ -13,7 +13,7 @@ body{font:17px/1.8 system-ui,"Microsoft YaHei",sans-serif;color:#23323c;backgrou
 <p>当前配置页保存定义到扩展设置，激活记录使用官方数据表。配置页自动写入官方作者表、自定义属性组及 Wiki 查阅备注尚未提供。鉴赏、进度、隐藏与揭晓阶段、分组系列、奖励助力和限时挑战不包含在此版本中。</p>
 <h2>安装和启用</h2>
 <ol>
-<li>在 Studio 的个性化面板选择“导入扩展”，安装成品使用“复制导入”，持续开发使用“关联源码工程”。选择 achievement-eded54 文件夹。</li>
+<li>在 Studio 的个性化面板选择“导入扩展”，安装成品使用“复制导入”，持续开发使用“关联源码工程”。选择 mixing-entropy.achievement 文件夹。</li>
 <li>将“成就”加入当前项目并启用。</li>
 <li>在官方数据表面板找到“成就激活记录”依赖。缺少状态表时，使用扩展提供的模板创建并绑定，模板会设置为 profile（跨存档共享），含 achievementId（文本）、active（布尔）两列，初始表为空。</li>
 <li>已有旧测试表绑定时，先保留原表，再创建符合模板的 profile 表并改绑。更新扩展不会把旧表策略静默改掉；session 临时表不用于正式保存。</li>
@@ -71,7 +71,7 @@ body{font:17px/1.8 system-ui,"Microsoft YaHei",sans-serif;color:#23323c;backgrou
 <p>列表容器本身的高级 CSS 由浏览模块管理，卡片内部的高级 CSS 可自由编辑。将 achievement-list 保持为页面顶层的卡片列表，避免放进普通分组；当前 Studio 2.8 的分组内智能模板入口有限制。调整位置和大小直接操作列表即可。横向实现适配当前宿主的列表结构，升级宿主后应核对实际滚动；未知结构会在扩展日志提示，并保留纵向列表。</p>
 <p>浏览选择保存在同一玩家档案的 browseMode 界面偏好中，与激活记录分开。固定方式不采用也不清除旧偏好；某种方式关闭后，旧选择暂不采用，重新开放后仍可恢复。自制页面保留数据列表标识符 achievement-list。需要玩家切换时添加相应按钮：achievement-mode-pagination（翻页）、achievement-mode-scroll（纵向）、achievement-mode-horizontal（横向）。控制器自动绑定点击，无须增加宏或剧情方法。按钮位置、外观可自行编排。通过“打开成就页”进入；修改作者设置后重开页面应用。</p>
 <p>默认页面已包含三个可隐藏按钮；旧项目自制页若要开放横向切换，添加横向按钮即可，无需重做卡片模板。缺少 achievement-list 标识符时不接管页面；直接使用官方“显示界面”只展示作者原页面，不会应用本模块的模式选择和横向适配。</p>
-<p>数据列表来源固定为 ext:achievement-eded54.entries。设置名称字段 name、说明字段 status、图片字段 icon。条目可用占位符：</p>
+<p>数据列表来源固定为 ext:mixing-entropy.achievement.entries。设置名称字段 name、说明字段 status、图片字段 icon。条目可用占位符：</p>
 <div class="table"><table><thead><tr><th>占位符</th><th>内容</th></tr></thead><tbody>
 <tr><td>{{item.title}} / {{item.name}}</td><td>名称</td></tr>
 <tr><td>{{item.image}} / {{item.icon}}</td><td>图标</td></tr>
@@ -102,5 +102,5 @@ body{font:17px/1.8 system-ui,"Microsoft YaHei",sans-serif;color:#23323c;backgrou
 <tr><td>读旧档后成就丢失</td><td>核对绑定表是否为 profile；旧 session/archive 表不会自动迁移</td></tr>
 </tbody></table></div>
 <h2>AI 指南辅助安装</h2>
-<p>运行 python tools/install-ai.py 默认只预览。在当前 Agent 有 letsgal-authoring 主技能时，配套知识安装到实际用户目录的 .letsgal-authoring/plugins/achievement-eded54/0.1.0；没有主技能时，才安装为独立 letsgal-plugin-achievement 技能。指定其它 Agent 可使用 --skills-root 与 --user-root。</p>
+<p>运行 python tools/install-ai.py 默认只预览。在当前 Agent 有 letsgal-authoring 主技能时，配套知识安装到实际用户目录的 .letsgal-authoring/plugins/mixing-entropy.achievement/0.1.0；没有主技能时，才安装为独立 letsgal-plugin-achievement 技能。指定其它 Agent 可使用 --skills-root 与 --user-root。</p>
 <p>确认预览目标后添加 --apply。相同内容重复执行不会覆盖；遇到同版本不同内容会停止并提示先比较保全。安装器不下载软件、不升级 Studio、不覆盖主技能。文件安装成功不等同于 Agent 已发现并使用技能。</p></main></html>

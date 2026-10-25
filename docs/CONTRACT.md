@@ -1,20 +1,20 @@
 # 成就最简版接口
 
-扩展 achievement-eded54，模块 main，版本 0.1.0。依赖 LetsGal Studio 2.8.0-beta.1 官方 SDK；稳定版和其他 Beta 未实测。
+扩展 mixing-entropy.achievement，模块 main，版本 0.1.0。依赖 LetsGal Studio 2.8.0-beta.1 官方 SDK；稳定版和其他 Beta 未实测。
 
 定义：main.levels 为 {id,name}[]，空数组使用 bronze/silver/gold；main.achievements 为 {id,name,icon,levelId}[]。编号稳定，引用等级必须存在。配置校验失败时拒绝状态写入。
 
 状态依赖 states：contract letsgal.achievement.states，version ^1.0.0，access runtime-write；autoCreate 提供 contractVersion 1.0.0、runtimePolicy profile、两列 schema 和空 documents。行 {id,achievementId,active}，id 由宿主生成，achievementId 唯一。同一玩家档案跨存档共享；读旧档及新开游戏不回退，deactivate 明确修改共享事实。现存 session/archive 绑定不静默改动，接入前应通过官方面板重新建立 profile 绑定，保留旧表。
 
-方法：achievement-eded54/activate、deactivate、is-active 均带字符串 achievementId；is-active 返回 boolean。open-page、refresh 无参数。脚本 paramsJson 每项为 {kind:"lit",value:...}；可视化 UI 的 ext.call 使用裸参数。
+方法：mixing-entropy.achievement/activate、deactivate、is-active 均带字符串 achievementId；is-active 返回 boolean。open-page、refresh 无参数。脚本 paramsJson 每项为 {kind:"lit",value:...}；可视化 UI 的 ext.call 使用裸参数。
 
-界面投影 achievement-eded54.entries 是 session list，源自配置与 states。每项含 id,name,icon,levelId,levelName,active,status,frame。通过 this.save 更新；不把临时投影当权威记录，不用世界状态变量镜像事实。
+界面投影 mixing-entropy.achievement.entries 是 session list，源自配置与 states。每项含 id,name,icon,levelId,levelName,active,status,frame。通过 this.save 更新；不把临时投影当权威记录，不用世界状态变量镜像事实。
 
-成就页 UI 数据来源 ext:achievement-eded54.entries。浮现控制器通过 achievement-name、achievement-level、achievement-icon 填值，可选 achievement-frame 改等级边框。UI 设置采用 ui:项目文件或 ui:@扩展/文件；不接受程序 UI 或槽位。
+成就页 UI 数据来源 ext:mixing-entropy.achievement.entries。浮现控制器通过 achievement-name、achievement-level、achievement-icon 填值，可选 achievement-frame 改等级边框。UI 设置采用 ui:项目文件或 ui:@扩展/文件；不接受程序 UI 或槽位。
 
 作者设置 main.browsePolicy 为 pagination（默认固定翻页）、scroll（固定纵向滚动）、horizontal（固定横向滚动）或 player（允许玩家切换）。固定时隐藏模式按钮，不读写玩家偏好。player 用 main.allowPagination、main.allowVertical、main.allowHorizontal 独立开放模式，默认 true、true、false；只有一种时也隐藏切换按钮。配置页不能关闭最后一种；外部输入全 false 时安全回退翻页。main.browseDefault 支持三种值，默认 pagination；不在开放集合中时选集合首项。重新打开页面应用策略。
 
-浏览偏好 achievement-eded54.browseMode 为 shared string，默认空字符串；有效值 pagination／scroll／horizontal，不是激活事实。多选 player 策略优先使用仍被开放的有效选择；空值、未知值或已停用值回退默认，但不自动覆写旧偏好。open-page 绑定 achievement-list 和相应 achievement-mode-pagination／achievement-mode-scroll／achievement-mode-horizontal 按钮。关闭时清理按钮、输入、观察器及临时布局；无 achievement-list 的页面保持自己的行为。直接显示界面不绑定此控制器。
+浏览偏好 mixing-entropy.achievement.browseMode 为 shared string，默认空字符串；有效值 pagination／scroll／horizontal，不是激活事实。多选 player 策略优先使用仍被开放的有效选择；空值、未知值或已停用值回退默认，但不自动覆写旧偏好。open-page 绑定 achievement-list 和相应 achievement-mode-pagination／achievement-mode-scroll／achievement-mode-horizontal 按钮。关闭时清理按钮、输入、观察器及临时布局；无 achievement-list 的页面保持自己的行为。直接显示界面不绑定此控制器。
 
 每轮运行按 flow.signal 隔离写队列和通知队列；幂等激活无通知，取消后再次激活可通知。isRestoring 时跳过写入结算；skip/runImmediately 激活只变状态。持久状态写入成功后才发布新视图及通知；通知错误不回滚状态。
 
