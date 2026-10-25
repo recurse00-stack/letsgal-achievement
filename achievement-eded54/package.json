@@ -1,0 +1,28 @@
+{
+  "name": "achievement-eded54",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "vite build && vite build --mode studio",
+    "watch": "node scripts/watch.mjs",
+    "check": "tsc --noEmit",
+    "test": "node --experimental-transform-types --test tests/*.test.ts"
+  },
+  "peerDependencies": {
+    "react": "^18.0.0",
+    "react-dom": "^18.0.0"
+  },
+  "devDependencies": {
+    "@avg-studio/sdk": "file:./sdk",
+    "@avg-studio/studio-ui": "file:./studio-ui",
+    "@chakra-ui/react": "^3.31.0",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "@types/react": "^18.0.28",
+    "@types/react-dom": "^18.0.11",
+    "vite": "^5.3.1",
+    "@vitejs/plugin-react": "^4.2.1",
+    "typescript": "^5.1.3"
+  }
+}

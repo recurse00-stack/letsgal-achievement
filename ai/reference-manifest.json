@@ -1,0 +1,10 @@
+{
+  "derived": true,
+  "files": [
+    {
+      "source": "docs/CONTRACT.md",
+      "reference": "references/CONTRACT.md",
+      "sha256": "c96ca587f9a50b54ed3214d631f890087ae9d0795ee1cfe566f05bcb172a7a30"
+    }
+  ]
+}

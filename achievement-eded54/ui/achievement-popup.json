@@ -1,0 +1,192 @@
+{
+  "version": 2,
+  "canvas": {
+    "width": 1920,
+    "height": 1080
+  },
+  "elements": [
+    {
+      "id": "rect-mvmam0l5-168",
+      "type": "rect",
+      "rect": {
+        "x": 1320,
+        "y": 64,
+        "w": 536,
+        "h": 160
+      },
+      "anchor": "c",
+      "selectorId": "vui-d6c3f5a74437455da19a22c023ca7b73",
+      "name": "浮现底板",
+      "refId": "achievement-frame",
+      "style": {
+        "fill": "#202833",
+        "radius": 16,
+        "opacity": 100,
+        "borderColor": "#b38a55",
+        "borderWidth": 2
+      },
+      "animation": {
+        "enter": {
+          "preset": "slide-left",
+          "durationMs": 300,
+          "delayMs": 0,
+          "distancePx": 48,
+          "fade": true
+        }
+      },
+      "props": {},
+      "events": {}
+    },
+    {
+      "id": "image-mvmam0l5-169",
+      "type": "image",
+      "rect": {
+        "x": 1346,
+        "y": 96,
+        "w": 96,
+        "h": 96
+      },
+      "anchor": "c",
+      "selectorId": "vui-a65d47c022404347b810cea731d0d778",
+      "name": "图标",
+      "refId": "achievement-icon",
+      "style": {
+        "opacity": 100,
+        "radius": 8
+      },
+      "animation": {
+        "enter": {
+          "preset": "slide-left",
+          "durationMs": 300,
+          "delayMs": 0,
+          "distancePx": 48,
+          "fade": true
+        }
+      },
+      "props": {
+        "asset": "",
+        "fit": "contain"
+      },
+      "events": {}
+    },
+    {
+      "id": "text-mvmam0l5-170",
+      "type": "text",
+      "rect": {
+        "x": 1470,
+        "y": 84,
+        "w": 350,
+        "h": 26
+      },
+      "anchor": "c",
+      "selectorId": "vui-986b14eaaf794f79a9af15a09acf6e7c",
+      "name": "提示",
+      "refId": "achievement-label",
+      "style": {
+        "fontSize": 18,
+        "color": "#b9c2cc",
+        "letterSpacing": 2,
+        "opacity": 100
+      },
+      "animation": {
+        "enter": {
+          "preset": "slide-left",
+          "durationMs": 300,
+          "delayMs": 0,
+          "distancePx": 48,
+          "fade": true
+        }
+      },
+      "props": {
+        "text": "成就已激活"
+      },
+      "events": {}
+    },
+    {
+      "id": "text-mvmam0l5-171",
+      "type": "text",
+      "rect": {
+        "x": 1470,
+        "y": 122,
+        "w": 350,
+        "h": 44
+      },
+      "anchor": "c",
+      "selectorId": "vui-89835bd1367a42c59ee415c255f9c588",
+      "name": "成就名称",
+      "refId": "achievement-name",
+      "style": {
+        "fontSize": 30,
+        "color": "#f4eee2",
+        "letterSpacing": 2,
+        "opacity": 100,
+        "fontWeight": 600
+      },
+      "animation": {
+        "enter": {
+          "preset": "slide-left",
+          "durationMs": 300,
+          "delayMs": 0,
+          "distancePx": 48,
+          "fade": true
+        }
+      },
+      "props": {
+        "text": "成就名称"
+      },
+      "events": {}
+    },
+    {
+      "id": "text-mvmam0l5-172",
+      "type": "text",
+      "rect": {
+        "x": 1470,
+        "y": 174,
+        "w": 350,
+        "h": 26
+      },
+      "anchor": "c",
+      "selectorId": "vui-9ff594dacf65434389645af9f82f7744",
+      "name": "成就等级",
+      "refId": "achievement-level",
+      "style": {
+        "fontSize": 20,
+        "color": "#d4b683",
+        "letterSpacing": 2,
+        "opacity": 100
+      },
+      "animation": {
+        "enter": {
+          "preset": "slide-left",
+          "durationMs": 300,
+          "delayMs": 0,
+          "distancePx": 48,
+          "fade": true
+        }
+      },
+      "props": {
+        "text": "等级"
+      },
+      "events": {}
+    }
+  ],
+  "container": {
+    "size": "(100%, 100%)",
+    "position": "(0, 0)",
+    "interactable": false,
+    "pointerEventsPassthrough": true
+  },
+  "transition": {
+    "enter": {
+      "preset": "fade",
+      "durationMs": 180,
+      "delayMs": 0
+    },
+    "exit": {
+      "preset": "fade",
+      "durationMs": 180,
+      "delayMs": 0
+    }
+  },
+  "name": "成就浮现"
+}
