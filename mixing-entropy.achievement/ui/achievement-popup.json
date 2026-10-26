@@ -12,7 +12,7 @@
         "x": 1320,
         "y": 64,
         "w": 536,
-        "h": 160
+        "h": 216
       },
       "anchor": "c",
       "selectorId": "vui-d6c3f5a74437455da19a22c023ca7b73",
@@ -42,7 +42,7 @@
       "type": "image",
       "rect": {
         "x": 1346,
-        "y": 96,
+        "y": 124,
         "w": 96,
         "h": 96
       },
@@ -141,7 +141,7 @@
       "type": "text",
       "rect": {
         "x": 1470,
-        "y": 174,
+        "y": 232,
         "w": 350,
         "h": 26
       },
@@ -168,8 +168,42 @@
         "text": "等级"
       },
       "events": {}
+    },
+    {
+      "id": "text-mvnpaoti-2049",
+      "type": "text",
+      "rect": {
+        "x": 1470,
+        "y": 174,
+        "w": 350,
+        "h": 48
+      },
+      "anchor": "c",
+      "selectorId": "vui-db9efe3f968441e5b5f169e1d4d765c8",
+      "name": "成就说明",
+      "refId": "achievement-description",
+      "style": {
+        "fontSize": 18,
+        "color": "#c4cbd5",
+        "letterSpacing": 0,
+        "opacity": 100
+      },
+      "animation": {
+        "enter": {
+          "preset": "slide-left",
+          "durationMs": 300,
+          "delayMs": 0,
+          "distancePx": 48,
+          "fade": true
+        }
+      },
+      "props": {
+        "text": ""
+      },
+      "events": {}
     }
   ],
+  "hiddenInStudio": true,
   "container": {
     "size": "(100%, 100%)",
     "position": "(0, 0)",

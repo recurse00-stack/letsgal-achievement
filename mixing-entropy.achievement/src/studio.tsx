@@ -1,5 +1,9 @@
 import { Panel, Section, SettingField, useSetting } from '@avg-studio/studio-ui';
 import { catalog, DEFAULT_LEVELS } from './model';
+import { DefaultStageEditor } from './stage-editor';
+import { AchievementEditor } from './achievement-editor';
+import { OperationInspector, ReadInspector } from './method-inspectors';
+export const inspectors = { 'change-stage': OperationInspector, 'stage-info': ReadInspector };
 function Browsing() {
   const [policy] = useSetting<string>('main.browsePolicy');
   const [paged, setPaged] = useSetting<boolean>('main.allowPagination');
@@ -30,22 +34,30 @@ function Browsing() {
 function Validation() {
   const [levels] = useSetting<unknown[]>('main.levels');
   const [items] = useSetting<unknown[]>('main.achievements');
+  const [stages] = useSetting<unknown[]>('main.displayStages');
+  const [defaults] = useSetting<unknown[]>('main.defaultStages');
   let message: string;
   let invalid = false;
-  try { const value = catalog(levels?.length ? levels : DEFAULT_LEVELS, items ?? []); message = `${value.achievements.length} 个成就，${value.levels.length} 个等级。`; }
+  try { const value = catalog(levels?.length ? levels : DEFAULT_LEVELS, items ?? [], stages ?? [], defaults ?? []); message = `${value.achievements.length} 个成就，${value.levels.length} 个等级。`; }
   catch (error) { invalid = true; message = error instanceof Error ? error.message : String(error); }
   return <p role={invalid ? 'alert' : 'status'} style={{ color: invalid ? 'var(--warn)' : 'var(--fg-secondary)' }}>{message}</p>;
 }
 export function settingsPage() {
   return <Panel>
-    <Section title="成就配置" description="填写定义；游戏中的激活记录由成就状态表保存。改名称或图标时保留原编号。">
-      <Validation /><SettingField name="main.levels" /><SettingField name="main.achievements" />
+    <Section title="成就配置" collapsible description="点击成就展开基础内容与展示阶段；每条成就可独立收起。游戏中只记录当前阶段。">
+      <Validation /><AchievementEditor />
     </Section>
-    <Section title="玩家界面" description="选择向玩家提供的浏览方式；固定模式隐藏切换按钮。页面、卡片和翻页控件可在 UI 编辑器中编排，通过“打开成就页”进入。">
+    <Section title="成就等级" collapsible defaultOpen={false} description="统一配置可供成就和阶段选择的等级。未配置时使用铜、银、金。">
+      <SettingField name="main.levels" />
+    </Section>
+    <Section title="默认阶段配置" collapsible defaultOpen={false} description="共用的阶段配置。成就默认沿用这里；在单个成就下修改后，仅该成就使用专用配置。">
+      <DefaultStageEditor />
+    </Section>
+    <Section title="玩家界面" collapsible defaultOpen={false} description="选择向玩家提供的浏览方式；固定模式隐藏切换按钮。页面、卡片和翻页控件可在 UI 编辑器中编排，通过“打开成就页”进入。">
       <SettingField name="main.page" />
       <Browsing />
     </Section>
-    <Section title="浮现动画" description="激活时依次播放；重复激活不重复通知。可编辑默认浮现界面中的进场、退场动画。">
+    <Section title="浮现动画" collapsible defaultOpen={false} description="开启浮现的阶段切换通知依次播放；重复操作不重复通知，隐藏阶段不浮现。可编辑默认浮现界面中的进场、退场动画。">
       <SettingField name="main.notifications" /><SettingField name="main.popup" /><SettingField name="main.durationMs" />
     </Section>
   </Panel>;

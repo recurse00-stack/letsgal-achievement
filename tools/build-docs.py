@@ -26,7 +26,7 @@ for line in lines+['']:
         if not ordered: parts.append('<ol>');ordered=True
         parts.append('<li>'+inline(re.sub(r'^\d+\. ','',line))+'</li>')
     else: parts.append('<p>'+inline(line)+'</p>')
-page='''<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>成就系统使用说明</title><style>
+page='''<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>局内成就系统使用说明</title><style>
 body{font:17px/1.8 system-ui,"Microsoft YaHei",sans-serif;color:#23323c;background:#f6f7f9;margin:0}main{max-width:1000px;margin:auto;padding:40px 28px 80px;background:white}h1,h2{line-height:1.35;color:#183b4b}h2{margin-top:2em}code{background:#edf2f4;border-radius:4px;padding:2px 5px;overflow-wrap:anywhere}.table{overflow-x:auto}table{border-collapse:collapse;width:100%;font-size:15px}th,td{border:1px solid #d7e0e4;padding:10px 14px;text-align:left;vertical-align:top}th{background:#eef4f6}li{margin:8px 0}@media print{body{background:white}main{padding:0;font-size:12pt}h2{break-after:avoid}tr{break-inside:avoid}}</style><main>'''+ '\n'.join(parts)+'</main></html>\n'
 (root/'docs/USER-GUIDE.html').write_text(page,encoding='utf-8')
 refs=root/'ai/references';refs.mkdir(parents=True,exist_ok=True)

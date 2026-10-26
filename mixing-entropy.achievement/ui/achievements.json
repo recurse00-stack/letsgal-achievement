@@ -183,7 +183,7 @@
         "source": "ext:mixing-entropy.achievement.entries",
         "layout": "card",
         "titleField": "name",
-        "subtitleField": "status",
+        "subtitleField": "stageName",
         "imageField": "icon",
         "cols": 5,
         "rows": 2,
@@ -242,10 +242,10 @@
               "id": "image-mvmalpk5-163",
               "type": "image",
               "rect": {
-                "x": 72,
-                "y": 40,
-                "w": 96,
-                "h": 96
+                "x": 80,
+                "y": 24,
+                "w": 80,
+                "h": 80
               },
               "anchor": "c",
               "selectorId": "vui-1b3fd737d4a64a9c88dc809e4145cf50",
@@ -289,9 +289,9 @@
               "type": "text",
               "rect": {
                 "x": 16,
-                "y": 164,
+                "y": 115,
                 "w": 208,
-                "h": 35
+                "h": 32
               },
               "anchor": "c",
               "selectorId": "vui-6bea598924d54caeb5a90c9cf968a121",
@@ -331,7 +331,8 @@
                 "text": "{{item.subtitle}}",
                 "__dataListTemplateRole": "subtitle"
               },
-              "events": {}
+              "events": {},
+              "hidden": true
             },
             {
               "id": "text-mvmalpk5-167",
@@ -378,6 +379,31 @@
                 "fit": "fill"
               },
               "events": {}
+            },
+            {
+              "id": "text-mvnp01ya-423",
+              "type": "text",
+              "rect": {
+                "x": 16,
+                "y": 153,
+                "w": 208,
+                "h": 44
+              },
+              "anchor": "c",
+              "selectorId": "vui-5b427298e77342cca471b2f09c7f8782",
+              "name": "成就说明",
+              "refId": "achievement-description",
+              "style": {
+                "fontSize": 16,
+                "color": "#c4cbd5",
+                "letterSpacing": 2,
+                "opacity": 100,
+                "textAlign": "center"
+              },
+              "props": {
+                "text": "{{item.description}}"
+              },
+              "events": {}
             }
           ]
         }
@@ -413,6 +439,7 @@
       "hidden": true
     }
   ],
+  "hiddenInStudio": true,
   "transition": {
     "enter": {
       "preset": "fade",
