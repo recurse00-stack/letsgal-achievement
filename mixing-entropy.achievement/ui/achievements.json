@@ -173,7 +173,7 @@
       },
       "anchor": "c",
       "selectorId": "vui-4db92047ac194c959a7c52488fc3286d",
-      "name": "成就列表（编辑内部卡片）",
+      "name": "双击编辑卡片 · 成就列表",
       "refId": "achievement-list",
       "style": {
         "radius": 12,
@@ -204,7 +204,7 @@
           },
           "anchor": "c",
           "selectorId": "vui-30d3a547936342ecaf733ea4d654ab8c",
-          "name": "网格项模板",
+          "name": "卡片模板 · 自由排版",
           "style": {
             "opacity": 100
           },
@@ -231,10 +231,34 @@
                 "borderColor": "#6b6354",
                 "borderWidth": 0,
                 "radius": 12,
-                "opacity": 100
+                "opacity": 100,
+                "customCss": "\n--achievement-card-role: background;"
               },
               "props": {
                 "__dataListTemplateRole": "surface"
+              },
+              "events": {}
+            },
+            {
+              "id": "image-mvqlu8tm-3457",
+              "type": "image",
+              "rect": {
+                "x": 0,
+                "y": 0,
+                "w": 240,
+                "h": 280
+              },
+              "anchor": "c",
+              "selectorId": "vui-27a8a9adafe049008e86b7d5e51f8ecb",
+              "name": "阶段背景图片",
+              "style": {
+                "opacity": 100,
+                "radius": 0,
+                "customCss": "--achievement-card-role: backgroundImage;"
+              },
+              "props": {
+                "asset": "{{item.cardBackground}}",
+                "fit": "cover"
               },
               "events": {}
             },
@@ -252,7 +276,8 @@
               "name": "网格项图片",
               "style": {
                 "radius": 7,
-                "opacity": 100
+                "opacity": 100,
+                "customCss": "\n--achievement-card-role: icon;"
               },
               "props": {
                 "asset": "{{item.image}}",
@@ -301,7 +326,8 @@
                 "color": "#f4eee2",
                 "textAlign": "center",
                 "opacity": 100,
-                "fontWeight": 600
+                "fontWeight": 600,
+                "customCss": "\n--achievement-card-role: name;"
               },
               "props": {
                 "text": "{{item.title}}",
@@ -325,7 +351,8 @@
                 "fontSize": 16,
                 "color": "#aeb7c5",
                 "textAlign": "center",
-                "opacity": 100
+                "opacity": 100,
+                "customCss": "\n--achievement-card-role: stage;"
               },
               "props": {
                 "text": "{{item.subtitle}}",
@@ -351,7 +378,8 @@
                 "color": "#d4b683",
                 "letterSpacing": 2,
                 "opacity": 100,
-                "textAlign": "center"
+                "textAlign": "center",
+                "customCss": "\n--achievement-card-role: level;"
               },
               "props": {
                 "text": "{{item.levelName}}"
@@ -372,7 +400,8 @@
               "name": "等级边框",
               "style": {
                 "opacity": 100,
-                "radius": 12
+                "radius": 12,
+                "customCss": "\n--achievement-card-role: frame;"
               },
               "props": {
                 "asset": "{{item.frame}}",
@@ -398,10 +427,35 @@
                 "color": "#c4cbd5",
                 "letterSpacing": 2,
                 "opacity": 100,
-                "textAlign": "center"
+                "textAlign": "center",
+                "customCss": "\n--achievement-card-role: description;"
               },
               "props": {
                 "text": "{{item.description}}"
+              },
+              "events": {}
+            },
+            {
+              "id": "text-mvqlu8tn-3458",
+              "type": "text",
+              "rect": {
+                "x": 0,
+                "y": 0,
+                "w": 1,
+                "h": 1
+              },
+              "anchor": "c",
+              "selectorId": "vui-8cc7e136a0fa4ea5913431780da55509",
+              "name": "卡片数据标识（请保留）",
+              "style": {
+                "fontSize": 1,
+                "color": "#f5f5f0",
+                "letterSpacing": 2,
+                "opacity": 0,
+                "customCss": "--achievement-card-role: key; pointer-events: none;"
+              },
+              "props": {
+                "text": "{{item.id}}"
               },
               "events": {}
             }
