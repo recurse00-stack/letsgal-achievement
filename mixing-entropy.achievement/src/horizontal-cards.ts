@@ -33,7 +33,8 @@ export function wheelDistance(x: number, y: number, unit: number, width: number)
  * Internal card templates retain all authored styles, CSS, events and bindings.
  * Keep the list top-level: Studio 2.8 cannot edit smart templates inside groups.
  */
-export function createHorizontalCards(layout: VisualUIElementHandle | null): HorizontalCards {
+export function createHorizontalCards(layout: VisualUIElementHandle | null, baseCss = ''): HorizontalCards {
+  if (baseCss) layout?.setStyle({ customCss: baseCss });
   const token = `achievement-${Date.now()}-${++sequence}`;
   const marker = `${MARKER}: ${token};`;
   let enabled = false, disposed = false, owned = false, frame = 0, attempts = 0;
@@ -46,7 +47,7 @@ export function createHorizontalCards(layout: VisualUIElementHandle | null): Hor
     detach(); detach = () => {}; grid = undefined;
   };
   const fail = (message: string) => {
-    clear(); layout?.setStyle({ customCss: '' });
+    clear(); layout?.setStyle({ customCss: baseCss });
     console.error('[成就] 横向卡片布局未接入：' + message + '。当前保留原生纵向列表。');
   };
   const attach = () => {
@@ -94,15 +95,15 @@ export function createHorizontalCards(layout: VisualUIElementHandle | null): Hor
       if (oldLabel === null) target.removeAttribute('aria-label'); else target.setAttribute('aria-label', oldLabel);
       target.scrollLeft = 0; target.scrollTop = 0;
     };
-    layout!.setStyle({ customCss: horizontalCss(token, Number(cols), rows, parseFloat(original.columnGap) || 0) });
+    layout!.setStyle({ customCss: baseCss + horizontalCss(token, Number(cols), rows, parseFloat(original.columnGap) || 0) });
   };
   return {
     setEnabled(next) {
       if (disposed || enabled === next) return;
       enabled = next; clear();
-      if (!next) { layout?.setStyle({ customCss: '' }); return; }
+      if (!next) { layout?.setStyle({ customCss: baseCss }); return; }
       if (!layout) { fail('缺少 achievement-list 卡片列表'); return; }
-      owned = true; layout.setStyle({ customCss: marker }); attempts = 0;
+      owned = true; layout.setStyle({ customCss: baseCss + marker }); attempts = 0;
       frame = requestAnimationFrame(attach);
       observer = new MutationObserver(() => {
         if (grid?.isConnected) return;

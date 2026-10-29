@@ -1,8 +1,15 @@
 import { Extension, extension, settings, defineSave, type ArrayItemBuilder } from '@avg-studio/sdk';
 import { type Entry } from './model';
 import { controller, PAGE, POPUP } from './runtime';
+import { appearanceFields } from './card-schema';
 
 const stageFields = (i: ArrayItemBuilder) => ({
+  ...appearanceFields(i),
+  appearanceSource: i.enum('外观配置', ['local', 'preset', 'level', 'default'] as const).default('local'),
+  appearanceId: i.string('共用外观编号').default(''),
+  overrideBackground: i.boolean('单独配置背景').default(false),
+  overrideFrame: i.boolean('单独配置边框').default(false),
+  overrideEffects: i.boolean('单独配置动效').default(false),
   id: i.string('阶段编号'), name: i.string('阶段名称'),
       visible: i.boolean('显示卡片与浮现').default(true),
       nameMode: i.enum('名称显示方式', ['base', 'custom', 'none'] as const).labels({ base: '使用成就基础配置', custom: '本阶段自定义', none: '不显示' }).default('none')
@@ -27,7 +34,33 @@ const viewSave = defineSave({
 @extension({ id: 'main', label: '成就', exposeUI: false })
 export default class AchievementExtension extends Extension.withSave(viewSave) {
   static settings = settings(s => ({
-    levels: s.array('等级', i => ({ id: i.string('等级编号'), name: i.string('等级名称') }))
+    stagePresentations: s.array('阶段表现', i => ({
+      achievementId: i.string('成就编号；空值为默认阶段').default(''), stageId: i.string('阶段编号'),
+      surface: i.enum('使用位置', ['card', 'popup'] as const), mode: i.enum('配置方式', ['custom', 'inherit'] as const).default('custom'),
+      enabled: i.boolean('启用').default(true), contentOverride: i.boolean('单独设置本处内容').default(true),
+      nameMode: i.enum('名称显示方式', ['stage', 'custom', 'none'] as const).default('stage'), displayName: i.string('显示名称').default(''),
+      descriptionMode: i.enum('说明显示方式', ['stage', 'custom', 'none'] as const).default('stage'), description: i.string('说明').default('').multiline(),
+      iconMode: i.enum('图标显示方式', ['stage', 'custom', 'none', 'unknown'] as const).default('stage'), icon: i.asset('图标').accepts('image'),
+      showLevel: i.boolean('显示等级').default(false), showStageName: i.boolean('显示阶段名称').default(false),
+      ui: i.string('浮现界面；空值沿用全局').default(''), durationMs: i.number('时长；0沿用全局').default(0).range(0, 60000),
+      ...appearanceFields(i), appearanceSource: i.enum('外观配置', ['local', 'preset', 'level', 'default'] as const).default('local'),
+      appearanceId: i.string('共用外观编号').default(''), overrideBackground: i.boolean('单独配置背景').default(false),
+      overrideFrame: i.boolean('单独配置边框').default(false), overrideEffects: i.boolean('单独配置动效').default(false),
+    })).maxItems(10000).describe('按成就、阶段、卡片或浮现分别保存；由阶段表现编辑器维护。'),
+    elementCss: s.array('元素进阶 CSS', i => ({
+      id: i.string('配置编号'), ownerKind: i.enum('所属类型', ['appearance', 'defaultStage', 'stage'] as const),
+      ownerId: i.string('外观或阶段编号'), achievementId: i.string('成就编号').default(''),
+      target: i.string('元素'), surface: i.enum('使用位置', ['both', 'card', 'popup'] as const).default('both'),
+      css: i.string('CSS').default('').multiline(), replace: i.boolean('替换上级 CSS').default(false),
+    })).maxItems(10000).describe('由共用外观与阶段的元素进阶 CSS 编辑器维护，按元素与使用位置保存。'),
+    appearances: s.array('通用表现方案', i => ({ id: i.string('方案编号'), name: i.string('方案名称'),
+      surface: i.enum('使用位置', ['card', 'popup'] as const).default('card'), isDefault: i.boolean('本组默认方案').default(false),
+      nameMode: i.enum('名称', ['stage', 'none'] as const).default('stage'), descriptionMode: i.enum('说明', ['stage', 'none'] as const).default('stage'),
+      iconMode: i.enum('图标', ['stage', 'none', 'unknown'] as const).default('stage'),
+      levelVisibility: i.enum('等级显示', ['stage', 'show', 'hide'] as const).default('stage'), stageNameVisibility: i.enum('阶段名显示', ['stage', 'show', 'hide'] as const).default('stage'),
+      ui: i.string('浮现界面').default(''), durationMs: i.number('浮现时长').default(0).range(0,60000), ...appearanceFields(i) }))
+      .maxItems(10000).table({ titleField: 'name', columns: ['id'] }),
+    levels: s.array('等级', i => ({ id: i.string('等级编号'), name: i.string('等级名称'), appearanceId: i.string('通用卡片方案编号').default(''), popupAppearanceId: i.string('通用浮现方案编号').default('') }))
       .addLabel('添加等级').emptyHint('未配置时使用 bronze 铜、silver 银、gold 金。')
       .maxItems(10000).table({ titleField: 'name', columns: ['id'] }),
     achievements: s.array('成就', i => ({
@@ -45,18 +78,26 @@ export default class AchievementExtension extends Extension.withSave(viewSave) {
       achievementId: i.string('成就编号'), ...stageFields(i), disabled: i.boolean('此成就不使用该阶段').default(false),
     })).maxItems(10000).table({ titleField: 'name', columns: ['achievementId', 'id'] }),
     page: s.uiRef('成就页').default('ui:' + PAGE).describe('可视化界面引用：项目界面文件名，或 @扩展编号/文件名。'),
-    browsePolicy: s.enum('页面浏览方式', ['pagination', 'scroll', 'horizontal', 'player'] as const)
-      .labels({ pagination: '固定翻页', scroll: '固定纵向滚动', horizontal: '固定横向滚动', player: '允许玩家切换' }).default('pagination')
-      .describe('固定方式隐藏切换按钮；允许玩家切换时，分别选择开放的方式。'),
-    allowPagination: s.boolean('开放翻页').default(true).enabledWhen('browsePolicy', 'player'),
-    allowVertical: s.boolean('开放纵向滚动').default(true).enabledWhen('browsePolicy', 'player'),
-    allowHorizontal: s.boolean('开放横向滚动').default(false).enabledWhen('browsePolicy', 'player'),
-    browseDefault: s.enum('默认浏览方式', ['pagination', 'scroll', 'horizontal'] as const)
-      .labels({ pagination: '翻页', scroll: '纵向滚动', horizontal: '横向滚动' }).default('pagination').enabledWhen('browsePolicy', 'player')
-      .describe('仅在已开放的方式中生效；玩家有效的已有选择优先。'),
-    popup: s.uiRef('浮现界面').default('ui:' + POPUP).describe('可编辑默认浮现界面，或填写自己的可视化界面引用。'),
-    notifications: s.boolean('启用浮现通知').default(true),
-    durationMs: s.number('每条浮现时长（毫秒）').default(3000).range(300, 60000).step(100),
+    cardSizeReference: s.array('最近卡片尺寸参考（自动测量）', i => ({
+      page: i.string('页面'), mode: i.string('浏览方式'), measuredAt: i.number('测量时间'),
+      width: i.number('建议画布宽度'), height: i.number('建议画布高度'),
+      contentWidth: i.number('内容宽度'), contentHeight: i.number('内容高度'),
+      gridWidth: i.number('网格宽度'), gridHeight: i.number('网格高度'),
+      cols: i.number('列数'), rows: i.number('行数'), gap: i.number('间距'),
+      listWidth: i.number('列表宽度'), listHeight: i.number('列表高度'),
+      templateWidth: i.number('原画布宽度'), templateHeight: i.number('原画布高度'),
+    })).maxItems(1).describe('预览自动生成的尺寸参考；不用于控制页面或卡片尺寸。'),
+    scrollDirection: s.enum('滚动方向', ['vertical', 'horizontal'] as const)
+      .labels({ vertical: '从上到下', horizontal: '从左到右' }).default('vertical')
+      .describe('仅当官方成就列表开启“滚动模式”时决定默认方向；不会把翻页改成滚动。'),
+    allowPlayerSwitch: s.boolean('允许玩家切换浏览方式').default(false)
+      .describe('关闭时始终使用官方页面的默认方式并隐藏切换按钮；开启后可额外开放其他方式。'),
+    allowPagination: s.boolean('额外开放翻页').default(false).enabledWhen('allowPlayerSwitch', true),
+    allowVertical: s.boolean('额外开放纵向滚动').default(false).enabledWhen('allowPlayerSwitch', true),
+    allowHorizontal: s.boolean('额外开放横向滚动').default(false).enabledWhen('allowPlayerSwitch', true),
+    popup: s.uiRef('默认浮现界面').default('ui:' + POPUP).describe('可编辑默认浮现界面，或填写自己的可视化界面引用。'),
+    notifications: s.boolean('允许播放阶段浮现').default(true),
+    durationMs: s.number('默认浮现时长（毫秒）').default(3000).range(300, 60000).step(100),
   }));
   static changeStage = this.method({
     id: 'change-stage', title: '成就操作', description: '先选成就，再选择目标展示阶段。可选预期当前阶段与浮现；相同阶段不重复通知，通常自动刷新。',

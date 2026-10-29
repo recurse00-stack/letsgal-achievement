@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { AssetPicker, Button, FieldRow, Section, Select, Switch, TextInput, useSetting } from '@avg-studio/studio-ui';
 import { catalog, DEFAULT_LEVELS, defaultsFor, presetStages, resolveStages, type Level, type Achievement, type ContentMode, type DisplayStage, type StageTemplate } from './model';
 import { StagePicker } from './stage-picker';
+import { StagePresentationEditor } from './stage-presentation-editor';
 import { defaultRemovalReason, localRemovalReason, removeDefaultStage, removeLocalStage } from './stage-removal';
 
 const contentOptions = [{ value: 'base', label: '使用成就基础配置' }, { value: 'custom', label: '本阶段自定义' }, { value: 'none', label: '不显示' }];
@@ -13,41 +14,39 @@ function StageFields({ stage, patch, levels, item }: { stage: StageTemplate; pat
   return <>
     <Section title="阶段信息" collapsible defaultOpen={false}>
     <FieldRow label="阶段名称"><TextInput value={stage.name} onChange={name => patch({ name })} /></FieldRow>
-    <FieldRow label="向玩家显示本阶段内容"><Switch checked={stage.visible} onChange={visible => patch({ visible })} /></FieldRow>
-    {stage.visible && <FieldRow label="向玩家提供阶段名称" description="自制卡片使用 item.stageName；浮现使用 achievement-stage 文字控件。"><Switch checked={stage.showStageName} onChange={showStageName => patch({ showStageName })} /></FieldRow>}
     <p style={noteStyle}>阶段编号：{stage.id}。修改名称不改变编号。</p>
     </Section>
-    <Section title="等级与边框" collapsible defaultOpen={false}>
+    <Section title="阶段等级" collapsible defaultOpen={false}>
     <FieldRow label="本阶段等级" description="使用基础等级时，每个成就读取自己的基础配置，不继承上一阶段。">
       <Select value={stage.levelMode ?? 'base'} options={[{ value: 'base', label: '使用成就基础等级' }, { value: 'custom', label: '指定本阶段等级' }]}
         onChange={value => patch({ levelMode: value as StageTemplate['levelMode'], ...(value === 'custom' && !levels.some(l => l.id === stage.levelId) ? { levelId: item?.levelId || levels[0]?.id || 'bronze' } : {}) })} />
     </FieldRow>
     {stage.levelMode === 'custom' && <FieldRow label="选择等级"><Select value={stage.levelId} options={levels.map(l => ({ value: l.id, label: l.name + '（' + l.id + '）' }))} onChange={levelId => patch({ levelId })} /></FieldRow>}
-    {stage.visible && <FieldRow label="展示等级与边框"><Switch checked={stage.showLevel} onChange={showLevel => patch({ showLevel })} /></FieldRow>}
     </Section>
-    {stage.visible ? <>
+    <Section title="本阶段内容" collapsible defaultOpen={false} description="卡片和浮现默认使用这里的内容，各自也能单独填写。">
       <p style={noteStyle}>“使用成就基础配置”读取对应成就的名称、说明或图标，不继承上一阶段。</p>
-      <Section title="名称显示" collapsible defaultOpen={false}>
-      <FieldRow label="名称显示方式"><Select value={stage.nameMode} options={contentOptions} onChange={value => patch({ nameMode: value as ContentMode })} /></FieldRow>
-      {stage.nameMode === 'custom' && <FieldRow label="显示名称"><TextInput value={stage.displayName} onChange={displayName => patch({ displayName })} /></FieldRow>}
-      </Section>
-      <Section title="说明显示" collapsible defaultOpen={false}>
-      <FieldRow label="说明显示方式"><Select value={stage.descriptionMode} options={contentOptions} onChange={value => patch({ descriptionMode: value as ContentMode })} /></FieldRow>
-      {stage.descriptionMode === 'custom' && <FieldRow label="显示说明"><TextInput multiline value={stage.description} onChange={description => patch({ description })} /></FieldRow>}
-      </Section>
-      <Section title="图标显示" collapsible defaultOpen={false}>
-      <FieldRow label="图标显示方式"><Select value={stage.iconMode} options={[...contentOptions, { value: 'unknown', label: '默认未知图标' }]} onChange={value => patch({ iconMode: value as StageTemplate['iconMode'] })} /></FieldRow>
-      {stage.iconMode === 'custom' && <FieldRow label="显示图标"><AssetPicker accepts={['image']} value={stage.icon} onChange={icon => patch({ icon })} /></FieldRow>}
-      </Section>
-      <Section title="内容预览" collapsible defaultOpen={false}>
-      <div style={{ padding: 12, background: 'var(--bg-subtle)', border: '1px solid var(--border-subtle)', borderRadius: 6 }}>
-        <strong>{stage.nameMode === 'base' ? item?.name || '（对应成就的基础名称）' : stage.nameMode === 'custom' ? stage.displayName : '（不显示名称）'}</strong>
-        <p style={{ whiteSpace: 'pre-wrap' }}>{stage.descriptionMode === 'base' ? item ? item.description : '（对应成就的基础说明）' : stage.descriptionMode === 'custom' ? stage.description : '（不显示说明）'}</p>
-        {stage.showStageName && <small>{stage.name}</small>}
-      </div>
-      </Section>
-    </> : <p style={noteStyle}>此阶段不会出现在成就页，也不会浮现。</p>}
+      {(['name', 'description', 'icon'] as const).map(field => <StageContentField key={stage.id + field} field={field} stage={stage} item={item} patch={patch} />)}
+    </Section>
+    <StagePresentationEditor stage={stage} item={item} levels={levels} />
   </>;
+}
+
+function StageContentField({ field, stage, item, patch }: { field: 'name' | 'description' | 'icon'; stage: StageTemplate; item?: Achievement; patch: (v: Partial<StageTemplate>) => void }) {
+  const [editing, setEditing] = useState(false);
+  const key = field === 'name' ? 'nameMode' : field === 'description' ? 'descriptionMode' : 'iconMode';
+  const valueKey = field === 'name' ? 'displayName' : field;
+  const label = { name: '名称', description: '说明', icon: '图标' }[field];
+  const mode = stage[key];
+  const summary = mode === 'base' ? (item?.[field] || '对应成就的基础配置') : mode === 'none' ? '不显示' : mode === 'unknown' ? '默认未知图标' : stage[valueKey] || '（空内容）';
+  return <FieldRow label={label}>
+    <p style={{ ...noteStyle, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{summary} {mode === 'base' ? ' · 沿用基础资料' : ' · 本阶段设置'}</p>
+    <Button onClick={() => setEditing(!editing)}>{editing ? '收起' : '单独设置'}</Button>
+    {editing && <div style={{ marginTop: 8 }}>
+      <Select value={mode} options={[...contentOptions, ...(field === 'icon' ? [{ value: 'unknown', label: '默认未知图标' }] : [])]} onChange={value => patch({ [key]: value })} />
+      {mode === 'custom' && (field === 'icon' ? <AssetPicker accepts={['image']} value={stage.icon} onChange={icon => patch({ icon })} /> : <TextInput multiline={field === 'description'} value={stage[valueKey]} onChange={value => patch({ [valueKey]: value })} />)}
+      <Button onClick={() => { patch({ [key]: 'base' }); setEditing(false); }}>恢复沿用基础资料</Button>
+    </div>}
+  </FieldRow>;
 }
 
 export function DefaultStageEditor() {
@@ -113,10 +112,10 @@ export function AchievementStageEditor({ item, setInitial }: { item: Achievement
       <Select value={item.initialStageId || 'unknown'} placeholder="请选择有效的初始阶段" options={all.map(s => ({ value: s.id, label: s.name }))} onChange={setInitial} />
     </FieldRow>
     <FieldRow label="编辑阶段" description="展开列表，右键阶段可删除；只影响当前成就。"><StagePicker value={stage?.id ?? ''} stages={all} onChange={select} removalReason={removalReason} onRemove={remove} /></FieldRow>
-    {stage && <p style={noteStyle}>{own ? '此阶段使用本成就专用配置，不随默认配置修改。' : '此阶段沿用默认配置；在此处修改仅影响当前成就。'}</p>}
+    {stage && <p style={noteStyle}>{own ? '阶段信息与内容使用本成就专用配置；卡片和浮现的继承分别设置。' : '阶段信息与内容沿用默认配置；卡片和浮现可分别配置。'}</p>}
     <div style={actionsStyle}>
       <Button onClick={() => { const next = { ...presetStages(item.id)[1], id: 'stage_' + crypto.randomUUID(), name: '新阶段' }; if (saveStage(next)) select(next.id); }}>添加本成就阶段</Button>
-      {stage && own && shared && <Button onClick={() => save(without(stage.id))}>恢复使用默认配置</Button>}
+      {stage && own && shared && <Button onClick={() => save(without(stage.id))}>恢复阶段信息与内容</Button>}
       {stage && <Button disabled={!!removalReason(stage.id)} title={removalReason(stage.id) || undefined} onClick={() => remove(stage.id)}>从此成就移除阶段</Button>}
     </div>
     {removed.length > 0 && <FieldRow label="恢复已移除的默认阶段"><Select value="" options={[{ value: '', label: '选择要恢复的阶段', disabled: true }, ...removed.map(s => ({ value: s.id, label: s.name }))]}

@@ -8,8 +8,10 @@ export interface BrowsePreference {
   write(mode: BrowseMode): void;
 }
 export interface BrowseOptions {
-  policy?: unknown;
-  defaultMode?: unknown;
+  /** Read from the saved official UI document, never an extension setting. */
+  authoredMode?: unknown;
+  scrollDirection?: unknown;
+  allowPlayerSwitch?: unknown;
   allowPagination?: unknown;
   allowVertical?: unknown;
   allowHorizontal?: unknown;
@@ -17,10 +19,12 @@ export interface BrowseOptions {
 export interface HorizontalCards { setEnabled(enabled: boolean): void; dispose(): void }
 
 export function browseChoices(options: BrowseOptions): BrowseMode[] {
-  if (options.policy !== 'player') return [options.policy === 'scroll' || options.policy === 'horizontal' ? options.policy : 'pagination'];
-  const allowed = BROWSE_MODES.filter(mode => mode === 'pagination' ? options.allowPagination !== false
-    : mode === 'scroll' ? options.allowVertical !== false : options.allowHorizontal === true);
-  return allowed.length ? allowed : ['pagination'];
+  if (options.authoredMode !== 'pagination' && options.authoredMode !== 'scroll') return [];
+  const initial = options.authoredMode === 'scroll' && options.scrollDirection === 'horizontal' ? 'horizontal' : options.authoredMode;
+  if (options.allowPlayerSwitch !== true) return [initial];
+  // The official default is always available. Checkboxes add optional player choices.
+  return [initial, ...BROWSE_MODES.filter(mode => mode !== initial && (mode === 'pagination' ? options.allowPagination === true
+    : mode === 'scroll' ? options.allowVertical === true : options.allowHorizontal === true))];
 }
 
 /** Every mode keeps the same native list, data bindings and authored card template. */
@@ -28,14 +32,22 @@ export function bindBrowseMode(view: VisualUIViewHandle, preference: BrowsePrefe
   const list = view.get('achievement-list');
   if (!list) { horizontal?.dispose(); return () => {}; }
   const choices = browseChoices(options);
-  const playerChoice = options.policy === 'player' && choices.length > 1;
-  const fallback = choices.includes(options.defaultMode as BrowseMode) ? options.defaultMode as BrowseMode : choices[0];
+  const playerChoice = options.allowPlayerSwitch === true && choices.length > 1;
+  const fallback = choices[0];
   const saved = playerChoice ? preference.read() : undefined;
   let mode = playerChoice && choices.includes(saved as BrowseMode) ? saved as BrowseMode : fallback;
   const buttons = BROWSE_MODES.map(key => ({ key, handle: view.get('achievement-mode-' + key) }));
+  if (!fallback) {
+    // Unreadable/custom documents keep native navigation instead of guessing a default.
+    buttons.forEach(({ handle }) => handle?.setHidden(true));
+    horizontal?.dispose();
+    return () => {};
+  }
+  let nativeMode = options.authoredMode;
   let live = true;
   const render = () => {
-    list.setProps({ navigationMode: mode === 'horizontal' ? 'scroll' : mode });
+    const nextNative = mode === 'horizontal' ? 'scroll' : mode;
+    if (nativeMode !== nextNative) { list.setProps({ navigationMode: nextNative }); nativeMode = nextNative; }
     horizontal?.setEnabled(mode === 'horizontal');
     for (const { key, handle } of buttons) {
       handle?.setHidden(!playerChoice || !choices.includes(key));

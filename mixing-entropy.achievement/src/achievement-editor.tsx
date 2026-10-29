@@ -32,7 +32,7 @@ export function AchievementEditor() {
         <span>{levels.find(l => l.id === item.levelId)?.name ?? item.levelId}</span>
       </button>
       {open.has(item.id) && <div style={{ padding: 14 }}>
-        <Section title="基础配置" collapsible defaultOpen={false}>
+        <Section title="基础配置" collapsible defaultOpen={false} description="各阶段可沿用这里的名称、说明、图标和等级，也可单独设置。">
         <p style={{ color: 'var(--fg-secondary)' }}>成就编号：{item.id}（供剧情调用，修改名称不会改变编号）</p>
         <FieldRow label="名称"><TextInput value={item.name} onChange={name => patch(item, { name })} /></FieldRow>
         <FieldRow label="说明"><TextInput multiline value={item.description ?? ''} onChange={description => patch(item, { description })} /></FieldRow>
