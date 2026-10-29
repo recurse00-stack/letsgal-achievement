@@ -1,6 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { AchievementController } from '../src/runtime.ts';
+import { legacyPresentation } from '../src/stage-presentation.ts';
 import { presetStages } from '../src/model.ts';
 
 function fixture(descriptionMode: 'visible' | 'hidden' | 'missing' = 'visible') {
@@ -114,12 +116,13 @@ for(const mode of ['visible','hidden','missing'] as const){
  });
 }
 
-test('current popup follows stage changes; hidden removes it and suppresses queued content',async()=>{
+test('stage changes close the old popup and discard stale queued content',async()=>{
  const f=fixture();try{
   f.config.durationMs=60000;
   await f.subject.setStage('a','revealed','',true);await f.subject.setStage('b','revealed','',true);await new Promise(setImmediate);
-  await f.subject.setStage('a','unknown');assert.equal(f.views[0].fields.get('achievement-name')!.props.text,'？？？');
-  await f.subject.setStage('b','hidden');await f.subject.setStage('a','hidden');await new Promise(setImmediate);await new Promise(setImmediate);
+  await f.subject.setStage('b','hidden');await f.subject.setStage('a','unknown');
+  assert.equal(f.closed.length,1);
+  await f.subject.setStage('a','hidden');await new Promise(setImmediate);await new Promise(setImmediate);
   assert.equal(f.closed.length,1);assert.equal(f.views.length,1);assert.deepEqual(f.projected.at(-1),[]);
  }finally{f.abort.abort();}
 });
@@ -129,7 +132,7 @@ test('global notifications and silent changes suppress popups; ending run releas
  await f.subject.openPage();f.config.notifications=false;await f.subject.setStage('a','revealed','',true);
  f.config.notifications=true;await f.subject.setStage('a','unknown');assert.equal(f.opened.length,1);
  await f.subject.setStage('a','revealed','',true);await new Promise(setImmediate);f.abort.abort();await new Promise(setImmediate);
- assert.equal(f.closed.length,2);assert.equal(f.stats().cleanup,5);assert.equal(f.stats().callbacks,0);assert.equal(f.settingCallbacks.size,0);
+ assert.equal(f.closed.length,2);assert.equal(f.stats().cleanup,11);assert.equal(f.stats().callbacks,0);assert.equal(f.settingCallbacks.size,0);
  await assert.rejects(f.subject.setStage('b','revealed'),/已结束/);
 });
 
@@ -155,5 +158,86 @@ test('duplicate or malformed saved records fail before projection; definition ed
   await f.subject.setStage('a','revealed');const before=structuredClone(f.rows);
   f.config.achievements[0].name='新名称';await f.subject.refresh();assert.equal(f.projected.at(-1)[0].name,'新名称');assert.deepEqual(f.rows,before);
   f.rows.push({...f.rows[0],id:'duplicate'});await assert.rejects(f.subject.refresh(),/重复/);
+ }finally{f.abort.abort();}
+});
+
+test('each page open reads fresh official navigation and ignores conflicting legacy settings', async t => {
+  const f = fixture();
+  const doc = JSON.parse(readFileSync(new URL('../ui/achievements.json', import.meta.url), 'utf8'));
+  const list = doc.elements.find((e: any) => e.refId === 'achievement-list');
+  const requests: Array<{ path: string; cache: unknown }> = [];
+  f.ctx.extensionResource = { url: (path: string) => 'https://extension.invalid/' + path };
+  t.mock.method(globalThis, 'fetch', async (path: string, options: RequestInit) => {
+    requests.push({ path, cache: options.cache });
+    return new Response(JSON.stringify(doc));
+  });
+  f.config.browsePolicy = 'pagination'; f.config.browseDefault = 'pagination';
+  try {
+    for (const mode of ['scroll', 'pagination']) {
+      list.props.navigationMode = mode;
+      await f.subject.openPage();
+      const view = f.views.at(-1)!;
+      assert.equal(view.fields.get('achievement-mode-' + mode)!.props.text, (mode === 'scroll' ? '纵向滚动' : '翻页') + ' ✓');
+      assert.equal(view.fields.get('achievement-list')!.props.navigationMode, undefined);
+      assert.equal(view.fields.get('achievement-mode-pagination')!.hidden, true);
+      view.close();
+    }
+    assert.equal(requests.length, 2);
+    assert.ok(requests.every(r => r.path.endsWith('/ui/achievements.json') && r.cache === 'no-store'));
+  } finally { f.abort.abort(); }
+});
+
+test('resource failures and pages outside this extension retain native navigation', async t => {
+  const f = fixture(); let fetches = 0;
+  f.ctx.extensionResource = { url: (path: string) => 'https://extension.invalid/' + path };
+  t.mock.method(globalThis, 'fetch', async () => { fetches++; throw Error('unavailable'); });
+  t.mock.method(console, 'warn', () => {});
+  f.config.allowPlayerSwitch = true; f.config.allowHorizontal = true;
+  try {
+    for (const page of [undefined, 'my-page', '@other/page']) {
+      f.config.page = page;
+      await f.subject.openPage();
+      const view = f.views.at(-1)!;
+      assert.equal(view.fields.get('achievement-list')!.props.navigationMode, undefined);
+      assert.equal(view.fields.get('achievement-mode-pagination')!.hidden, true);
+      assert.equal(view.fields.get('achievement-mode-horizontal')!.hidden, true);
+      view.close();
+    }
+    assert.equal(fetches, 1);
+  } finally { f.abort.abort(); }
+});
+
+
+test('stage popup can use separate content/template/duration while the card remains unchanged', async () => {
+ const f=fixture();try{
+  const p={...legacyPresentation(presetStages('')[2], 'popup'),achievementId:'a',nameMode:'custom',displayName:'POPUP',descriptionMode:'custom',description:'ONLY POPUP',ui:'my-popup',durationMs:300};
+  f.config.durationMs=60000;f.config.stagePresentations=[p];
+  await f.subject.setStage('a','revealed','',true);await new Promise(setImmediate);
+  assert.equal(f.opened[0],'my-popup');assert.equal(f.views[0].fields.get('achievement-name')!.props.text,'POPUP');
+  assert.equal(f.views[0].fields.get('achievement-description')!.props.text,'ONLY POPUP');
+  assert.equal(f.projected.at(-1)[0].name,'A');
+  await new Promise(r=>setTimeout(r,350));assert.equal(f.closed.length,1);
+ }finally{f.abort.abort();}
+});
+test('disabled stage popup, repeat, restore, and page opening never trigger a notification', async () => {
+ const f=fixture();try{
+  f.config.stagePresentations=[{...legacyPresentation(presetStages('')[2], 'popup'),achievementId:'a',enabled:false}];
+  await f.subject.setStage('a','revealed','',true);await new Promise(setImmediate);assert.equal(f.opened.length,0);
+  f.config.stagePresentations[0].enabled=true;
+  await f.subject.setStage('a','revealed','',true);await f.subject.openPage();await new Promise(setImmediate);
+  assert.equal(f.views.length,1);assert.match(f.opened[0],/achievements$/);
+  f.ctx.flow.isRestoring=true;await f.subject.setStage('a','unknown','',true);assert.equal(f.views.length,1);
+ }finally{f.abort.abort();}
+});
+test('changing the live popup UI or disabling global notifications closes it without replay', async () => {
+ const f=fixture();try{
+  f.config.durationMs=60000;
+  await f.subject.setStage('a','revealed','',true);await new Promise(setImmediate);
+  f.config.stagePresentations=[{...legacyPresentation(presetStages('')[2],'popup'),achievementId:'a',ui:'another-popup'}];
+  f.settingCallbacks.get('stagePresentations')!();await new Promise(setImmediate);await new Promise(setImmediate);
+  assert.equal(f.closed.length,1);assert.equal(f.views.length,1);
+  await f.subject.setStage('b','revealed','',true);await new Promise(setImmediate);
+  f.config.notifications=false;f.settingCallbacks.get('notifications')!();await new Promise(setImmediate);await new Promise(setImmediate);
+  assert.equal(f.closed.length,2);assert.equal(f.views.length,2);
  }finally{f.abort.abort();}
 });

@@ -3,7 +3,7 @@
   "name": "局内成就系统",
   "description": "自定义展示阶段、阶段等级、自由设计卡片与浮现、三种浏览方式",
   "author": "mixing-entropy",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "entry": "dist/index.mjs",
   "studioEntry": "dist/studio.js",
   "sdkVersion": "^2.8.0-beta.1",

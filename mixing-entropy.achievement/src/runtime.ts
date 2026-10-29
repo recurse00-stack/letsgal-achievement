@@ -3,6 +3,10 @@ import { AchievementError, stageRecords, catalog, currentStage, DEFAULT_LEVELS, 
 import { NotificationQueue, delay } from './notification-queue.ts';
 import { bindBrowseMode } from './browse-mode.ts';
 import { createHorizontalCards } from './horizontal-cards.ts';
+import { bindCardLayout, type CardLayoutAdapter } from './card-layout.ts';
+import { authoredNavigation, localTemplatePath, templateParts, type TemplatePart } from './template-contract.ts';
+import { bindPopupAppearance, type PopupAppearance } from './popup-appearance.ts';
+import { makeCardSizeReference, sizeReferenceKey } from './card-size-reference.ts';
 
 export const PAGE = '@mixing-entropy.achievement/achievements';
 export const POPUP = '@mixing-entropy.achievement/achievement-popup';
@@ -21,18 +25,20 @@ export function controller(ctx: ExtensionContext, sink: ViewSink): AchievementCo
 }
 export class AchievementController {
   private readonly table: DatabaseCollectionAPI<StateDocument>;
-  private readonly notifications: NotificationQueue<{ id: string }>;
+  private readonly notifications: NotificationQueue<{ id: string; stageId: string }>;
   private latest: Entry[] = [];
+  private latestPopups: Entry[] = [];
   private updatePopup?: (list: Entry[]) => void;
   private tail: Promise<unknown> = Promise.resolve();
   private readonly cleanups: Array<() => void> = [];
   private page?: VisualUIViewHandle;
+  private cardLayout?: CardLayoutAdapter;
   constructor(private readonly ctx: ExtensionContext, private readonly sink: ViewSink, private readonly signal: AbortSignal) {
     this.table = ctx.database.collection<StateDocument>('states');
     this.notifications = new NotificationQueue((item, abort) => this.popup(item, abort), error => console.error('[成就] 浮现失败，阶段记录已保留', error));
     const refresh = () => { if (!signal.aborted) void this.refresh().catch(error => console.error('[成就] 刷新失败', error)); };
     this.cleanups.push(this.table.watch(refresh));
-    this.cleanups.push(ctx.settings.subscribe('levels', refresh), ctx.settings.subscribe('achievements', refresh), ctx.settings.subscribe('displayStages', refresh), ctx.settings.subscribe('defaultStages', refresh));
+    this.cleanups.push(ctx.settings.subscribe('levels', refresh), ctx.settings.subscribe('achievements', refresh), ctx.settings.subscribe('displayStages', refresh), ctx.settings.subscribe('defaultStages', refresh), ctx.settings.subscribe('appearances', refresh), ctx.settings.subscribe('elementCss', refresh), ctx.settings.subscribe('stagePresentations', refresh), ctx.settings.subscribe('notifications', refresh), ctx.settings.subscribe('popup', refresh), ctx.settings.subscribe('durationMs', refresh));
     const dispose = () => { this.notifications.stop(); this.page?.close(); this.cleanups.splice(0).forEach(fn => fn()); };
     if (signal.aborted) dispose(); else signal.addEventListener('abort', dispose, { once: true });
   }
@@ -46,7 +52,7 @@ export class AchievementController {
   }
   private definitions() {
     const levels = this.ctx.settings.get<unknown[]>('levels') ?? [];
-    return catalog(levels.length ? levels : DEFAULT_LEVELS, this.ctx.settings.get('achievements') ?? [], this.ctx.settings.get('displayStages') ?? [], this.ctx.settings.get('defaultStages') ?? []);
+    return catalog(levels.length ? levels : DEFAULT_LEVELS, this.ctx.settings.get('achievements') ?? [], this.ctx.settings.get('displayStages') ?? [], this.ctx.settings.get('defaultStages') ?? [], this.ctx.settings.get('appearances') ?? [], this.ctx.settings.get('elementCss') ?? [], this.ctx.settings.get('stagePresentations') ?? []);
   }
   private async read() {
     const definitions = this.definitions();
@@ -57,12 +63,17 @@ export class AchievementController {
   }
   private publish(definitions: ReturnType<typeof catalog>, records: ReturnType<typeof stageRecords>): Entry[] {
     this.assertLive();
-    const result = entries(definitions, records).map(item => ({ ...item,
+    const prepare = (surface: 'card' | 'popup') => entries(definitions, records, surface).map(item => ({ ...item,
       icon: item.iconMode === 'unknown' ? 'extension-asset://mixing-entropy.achievement/assets/achievement-unknown.svg' : item.iconMode === 'base' ? item.icon || 'extension-asset://mixing-entropy.achievement/assets/achievement.svg' : item.icon,
-      frame: `extension-asset://mixing-entropy.achievement/assets/frame-${['bronze', 'silver', 'gold'].includes(item.levelId) ? item.levelId : 'neutral'}.svg` }));
+      frame: item.appearance?.frameMode === 'nineSlice' && item.appearance.frameImage ? item.appearance.frameImage : `extension-asset://mixing-entropy.achievement/assets/frame-${['bronze', 'silver', 'gold'].includes(item.levelId) ? item.levelId : 'neutral'}.svg`,
+      cardBackground: item.appearance?.backgroundMode === 'image' && item.appearance.backgroundImage ? item.appearance.backgroundImage : 'data:image/svg+xml,%3Csvg xmlns="http://www.w3.org/2000/svg" width="1" height="1"/%3E',
+    }));
+    const result = prepare('card');
     this.latest = result;
+    this.latestPopups = prepare('popup');
     this.sink.set('entries', result);
-    this.updatePopup?.(result);
+    this.updatePopup?.(this.latestPopups);
+    this.cardLayout?.refresh();
     return result;
   }
   refresh(): Promise<void> {
@@ -90,8 +101,8 @@ export class AchievementController {
       if (!change.matched) return false;
       // Persist even an equal default stage once, so later author default edits cannot move it.
       if (change.changed || !records.find(r => r.id === id)?.stageId) await this.write(documents, change.records.find(r => r.id === id)!);
-      const list = this.publish(definitions, change.records);
-      if (change.changed && notify && this.ctx.settings.get('notifications') !== false && list.some(r => r.id === id)) this.notifications.enqueue({ id });
+      this.publish(definitions, change.records);
+      if (change.changed && notify && this.ctx.settings.get('notifications') !== false && this.latestPopups.some(r => r.id === id)) this.notifications.enqueue({ id, stageId: target });
       return true;
     });
   }
@@ -102,44 +113,87 @@ export class AchievementController {
     await this.refresh();
     this.assertLive();
     if (this.page) return;
-    const page = await this.ctx.visualUI.open(this.document('page', PAGE), { modal: true });
+    const name = this.document('page', PAGE);
+    const document = await this.authoredPage(name);
+    this.assertLive();
+    const page = await this.ctx.visualUI.open(name, { modal: true });
     if (this.signal.aborted) { page.close(); return; }
     this.page = page;
+    let template: TemplatePart[] = [];
+    if (document) {
+      try { template = templateParts(document); }
+      catch (error) { console.warn('[成就] 卡片外观与尺寸参考未接入，保留原生模板：', error); }
+    }
+    let sizeKey = '', sizeTimer: ReturnType<typeof setTimeout> | undefined;
+    const cardLayout = bindCardLayout(() => this.latest, template, size => {
+      const reference = makeCardSizeReference(document, name, size);
+      if (!reference || sizeReferenceKey(reference) === sizeKey) return;
+      sizeKey = sizeReferenceKey(reference);
+      clearTimeout(sizeTimer);
+      sizeTimer = setTimeout(() => {
+        if (this.signal.aborted || this.page !== page) return;
+        try { this.ctx.settings.set('cardSizeReference', [reference]); }
+        catch (error) { console.warn('[成就] 尺寸参考保存失败，页面仍可正常使用：', error); }
+      }, 250);
+    });
+    this.cardLayout = cardLayout;
     const stopBrowsing = bindBrowseMode(page, {
       read: () => this.sink.get('browseMode'),
       write: mode => { this.assertLive(); this.sink.set('browseMode', mode); },
     }, {
-      policy: this.ctx.settings.get('browsePolicy'),
-      defaultMode: this.ctx.settings.get('browseDefault'),
+      authoredMode: authoredNavigation(document),
+      scrollDirection: this.ctx.settings.get('scrollDirection'),
+      allowPlayerSwitch: this.ctx.settings.get('allowPlayerSwitch'),
       allowPagination: this.ctx.settings.get('allowPagination'),
       allowVertical: this.ctx.settings.get('allowVertical'),
       allowHorizontal: this.ctx.settings.get('allowHorizontal'),
-    }, createHorizontalCards(page.get('achievement-list')));
-    page.onClose(() => { stopBrowsing(); if (this.page === page) this.page = undefined; });
+    }, createHorizontalCards(page.get('achievement-list'), cardLayout.css));
+    page.onClose(() => { clearTimeout(sizeTimer); cardLayout.dispose(); stopBrowsing(); if (this.cardLayout === cardLayout) this.cardLayout = undefined; if (this.page === page) this.page = undefined; });
   }
-  private document(key: string, fallback: string): string {
-    const value = (this.ctx.settings.get<string>(key) || fallback).replace(/^ui:/, '');
+  private async authoredPage(name: string): Promise<unknown> {
+    const path = localTemplatePath(name);
+    if (!path || !this.ctx.extensionResource) return undefined;
+    try {
+      const response = await fetch(this.ctx.extensionResource.url(path), { signal: AbortSignal.any([this.signal, AbortSignal.timeout(3000)]), cache: 'no-store' });
+      if (!response.ok) throw Error(`模板资源读取失败：${response.status}`);
+      return await response.json();
+    } catch (error) {
+      if (!this.signal.aborted) console.warn('[成就] 无法读取页面配置，保留官方页面原有编排和浏览方式：', error);
+      return undefined;
+    }
+  }
+  private document(key: string, fallback: string, override = ''): string {
+    let value = (override || this.ctx.settings.get<string>(key) || fallback).replace(/^ui:/, '');
+    if (value.includes('/') && !value.startsWith('@')) value = '@' + value;
     if (!/^(?:@[A-Za-z0-9_.-]+\/)?[A-Za-z0-9_-]+$/.test(value)) throw new AchievementError('INVALID_UI', `${key} 需要可视化界面的文件名或 @扩展编号/文件名`);
     return value;
   }
-  private async popup(request: { id: string }, abort: AbortSignal): Promise<void> {
+  private async popup(request: { id: string; stageId: string }, abort: AbortSignal): Promise<void> {
     if (abort.aborted || this.signal.aborted) return;
-    // Resolve at playback time, not enqueue time. A queued popup must not reveal old content.
+    // Read current content at playback; discard stale stage notifications.
     await this.refresh();
-    const eligible = (list: Entry[]) => list.find(row => row.id === request.id);
-    if (abort.aborted || !eligible(this.latest) || this.ctx.settings.get('notifications') === false) return;
-    const name = this.document('popup', POPUP);
+    const eligible = (list: Entry[]) => this.ctx.settings.get('notifications') === false ? undefined : list.find(row => row.id === request.id && row.stageId === request.stageId);
+    if (abort.aborted || !eligible(this.latestPopups) || this.ctx.settings.get('notifications') === false) return;
+    const name = this.document('popup', POPUP, eligible(this.latestPopups)?.popupUI);
+    const requestedDuration = eligible(this.latestPopups)?.popupDurationMs || this.ctx.settings.get<number>('durationMs');
+    const popupDocument = await this.authoredPage(name);
+    if (abort.aborted || this.signal.aborted || !eligible(this.latestPopups)) return;
+    let appearance: PopupAppearance | undefined;
+    let appearanceView: VisualUIViewHandle | undefined;
     const bind = (view: VisualUIViewHandle) => {
-      const item = eligible(this.latest);
+      const item = eligible(this.latestPopups);
       if (!item) return;
-      view.get('achievement-frame')?.setStyle({ borderColor: ({ bronze: '#b38a55', silver: '#b9c2cc', gold: '#d4b04c' } as Record<string, string>)[item.levelId] ?? '#697888' });
       view.get('achievement-label')?.setProps({ text: '成就展示已更新' });
       view.get('achievement-name')?.setProps({ text: item.name });
-      // Content comes from the same definition as the card; visibility/layout remain authored.
+      // Stage content is shared by default; popup overrides never alter cards.
       view.get('achievement-description')?.setProps({ text: item.description });
       view.get('achievement-level')?.setProps({ text: item.levelName });
       view.get('achievement-stage')?.setProps({ text: item.stageName });
       view.get('achievement-icon')?.setProps({ asset: item.icon });
+      if (appearanceView !== view) {
+        appearance?.dispose(); appearanceView = view;
+        appearance = bindPopupAppearance(view, popupDocument, () => eligible(this.latestPopups), asset => this.ctx.asset.resolve(asset).url);
+      } else appearance?.refresh();
     };
     const detach = this.ctx.visualUI.onOpen(name, bind);
     let view: VisualUIViewHandle | undefined;
@@ -151,22 +205,25 @@ export class AchievementController {
     const end = () => resolveClosed();
     let suppressed = false;
     const update = (list: Entry[]) => {
-      if (!eligible(list)) { suppressed = true; view?.close(); end(); }
+      if (!eligible(list) || this.document('popup', POPUP, eligible(list)?.popupUI) !== name || (eligible(list)?.popupDurationMs || this.ctx.settings.get<number>('durationMs')) !== requestedDuration) { suppressed = true; view?.close(); end(); }
       else if (view && !suppressed) bind(view);
     };
     this.updatePopup = update;
     abort.addEventListener('abort', end, { once: true });
     try {
       view = await this.ctx.visualUI.open(name, { modal: false, interactable: false, pointerEventsPassthrough: true });
-      if (abort.aborted || this.signal.aborted || suppressed || !eligible(this.latest)) return;
+      if (abort.aborted || this.signal.aborted || suppressed || !eligible(this.latestPopups)) return;
       bind(view);
       detachClose = view.onClose(() => { closed = true; resolveClosed(); });
-      const configured = this.ctx.settings.get<number>('durationMs');
+      const configured = requestedDuration;
       const duration = typeof configured === 'number' && Number.isFinite(configured) ? Math.max(300, Math.min(60000, configured)) : 3000;
       await Promise.race([delay(duration, timerAbort.signal), closedPromise]);
       if (!closed) view.close();
       if (!abort.aborted) await closedPromise;
     } finally {
+      // This instance is closing/discarded. Remove DOM ownership without calling
+      // setStyle on a closed official handle; the next instance reads its resource.
+      appearance?.dispose(false);
       timerAbort.abort();
       if (this.updatePopup === update) this.updatePopup = undefined;
       detach(); detachClose(); abort.removeEventListener('abort', end);
