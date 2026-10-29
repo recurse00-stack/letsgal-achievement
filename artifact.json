@@ -1,13 +1,13 @@
 {
   "extensionId": "mixing-entropy.achievement",
   "name": "局内成就系统",
-  "version": "0.1.1",
-  "revision": "20261026-release.1",
+  "version": "0.1.2",
+  "revision": "20261029-release.1",
   "status": "release",
   "engine": {
     "beta": "2.8.0-beta.1",
     "stable": "unverified"
   },
-  "base_published_version": "0.1.0",
-  "release_version": "0.1.1"
+  "base_published_version": "0.1.1",
+  "release_version": "0.1.2"
 }
