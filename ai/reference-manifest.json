@@ -8,7 +8,7 @@
         "方法"
       ],
       "reference": "references/methods-and-state.md",
-      "source_sha256": "3c7cae70d2db7b50dadf126bfc3ead702fbbfe40fc8bb24b70d7b208cc2003c0",
+      "source_sha256": "e19c3df3d6dcee0164c124483d4cbd8a851a6c7afea34ce4f92120b2930c2019",
       "sha256": "4daa49ed63affa7abb59c0199fa3ed2f1e99d8497f474ef2767448bfd8f19e7c"
     },
     {
@@ -18,7 +18,7 @@
         "阶段表现与界面分层"
       ],
       "reference": "references/stage-configuration.md",
-      "source_sha256": "3c7cae70d2db7b50dadf126bfc3ead702fbbfe40fc8bb24b70d7b208cc2003c0",
+      "source_sha256": "e19c3df3d6dcee0164c124483d4cbd8a851a6c7afea34ce4f92120b2930c2019",
       "sha256": "c78fcffc7046a5879a5cb2dd4b08fc55cee18130e324c2d3d8f3f2b326814d83"
     },
     {
@@ -28,7 +28,7 @@
         "横向浏览适配"
       ],
       "reference": "references/page-and-notifications.md",
-      "source_sha256": "3c7cae70d2db7b50dadf126bfc3ead702fbbfe40fc8bb24b70d7b208cc2003c0",
+      "source_sha256": "e19c3df3d6dcee0164c124483d4cbd8a851a6c7afea34ce4f92120b2930c2019",
       "sha256": "ff26146731c333183f64700ead0ed43bebb836e8b73cc18c66a4902b5b0ad9b8"
     },
     {
@@ -38,7 +38,7 @@
         "元素 CSS"
       ],
       "reference": "references/appearance-and-css.md",
-      "source_sha256": "3c7cae70d2db7b50dadf126bfc3ead702fbbfe40fc8bb24b70d7b208cc2003c0",
+      "source_sha256": "e19c3df3d6dcee0164c124483d4cbd8a851a6c7afea34ce4f92120b2930c2019",
       "sha256": "b3533421c9ff7443d98274825df14eb3def5fc2ed32b819e2ed21a85613d02ba"
     },
     {
@@ -47,14 +47,14 @@
         "验证范围"
       ],
       "reference": "references/compatibility.md",
-      "source_sha256": "3c7cae70d2db7b50dadf126bfc3ead702fbbfe40fc8bb24b70d7b208cc2003c0",
-      "sha256": "788b7dcaa62385af8ee4da9c8e6c8d8984ec4ba2ec07070c6607a4be15f9b6bc"
+      "source_sha256": "e19c3df3d6dcee0164c124483d4cbd8a851a6c7afea34ce4f92120b2930c2019",
+      "sha256": "e26f05eadd02f2740036413d5f2e7379ae3f77001e23e637d8017c3c46563b92"
     },
     {
       "source": "docs/CONTRACT.md",
       "sections": [],
       "reference": "references/CONTRACT.md",
-      "source_sha256": "3c7cae70d2db7b50dadf126bfc3ead702fbbfe40fc8bb24b70d7b208cc2003c0",
+      "source_sha256": "e19c3df3d6dcee0164c124483d4cbd8a851a6c7afea34ce4f92120b2930c2019",
       "sha256": "50ee9fa6e4c688c9c9909a8a5f4c290a7f1b2b8d22205f7eb594e3f52fd420a5"
     }
   ]

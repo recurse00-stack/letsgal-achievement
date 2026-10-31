@@ -76,6 +76,13 @@ export default defineConfig(({ mode }) => {
   const studio = mode === "studio";
   return {
     plugins: studio ? [react()] : [react(), studioOnlyGuard()],
+    // 两个入口都在浏览器环境运行。Vite 的库模式不会替换依赖里的
+    // process.env；用固定常量移除 PostCSS 的开发检查和终端语言判断。
+    // 不读取构建电脑的环境变量，也不为运行环境注入 process / Node 垫片。
+    define: {
+      "process.env.NODE_ENV": JSON.stringify("production"),
+      "process.env.LANG": JSON.stringify(""),
+    },
     build: {
       lib: {
         entry: path.resolve(__dirname, studio ? "src/studio.tsx" : "src/index.tsx"),

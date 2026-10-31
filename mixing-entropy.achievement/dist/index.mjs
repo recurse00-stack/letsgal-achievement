@@ -3318,17 +3318,6 @@ function parse$3(css, opts) {
   try {
     parser2.parse();
   } catch (e) {
-    if (process.env.NODE_ENV !== "production") {
-      if (e.name === "CssSyntaxError" && opts && opts.from) {
-        if (/\.scss$/i.test(opts.from)) {
-          e.message += "\nYou tried to parse SCSS with the standard CSS parser; try again with the postcss-scss parser";
-        } else if (/\.sass/i.test(opts.from)) {
-          e.message += "\nYou tried to parse Sass with the standard CSS parser; try again with the postcss-sass parser";
-        } else if (/\.less$/i.test(opts.from)) {
-          e.message += "\nYou tried to parse Less with the standard CSS parser; try again with the postcss-less parser";
-        }
-      }
-    }
     throw e;
   }
   return parser2.root;
@@ -3402,14 +3391,6 @@ let Result$3 = class Result {
 };
 var result = Result$3;
 Result$3.default = Result$3;
-let printed = {};
-var warnOnce$2 = function warnOnce(message) {
-  if (printed[message]) return;
-  printed[message] = true;
-  if (typeof console !== "undefined" && console.warn) {
-    console.warn(message);
-  }
-};
 let Container$1 = container;
 let Document$2 = document$1;
 let MapGenerator$1 = mapGenerator;
@@ -3418,7 +3399,6 @@ let Result$2 = result;
 let Root$2 = root;
 let stringify$2 = stringify_1;
 let { isClean, my } = symbols;
-let warnOnce$1 = warnOnce$2;
 const TYPE_TO_CLASS_NAME = {
   atrule: "AtRule",
   comment: "Comment",
@@ -3597,18 +3577,7 @@ let LazyResult$2 = class LazyResult {
         error.plugin = plugin2.postcssPlugin;
         error.setMessage();
       } else if (plugin2.postcssVersion) {
-        if (process.env.NODE_ENV !== "production") {
-          let pluginName = plugin2.postcssPlugin;
-          let pluginVer = plugin2.postcssVersion;
-          let runtimeVer = this.result.processor.version;
-          let a = pluginVer.split(".");
-          let b = runtimeVer.split(".");
-          if (a[0] !== b[0] || parseInt(a[1]) > parseInt(b[1])) {
-            console.error(
-              "Unknown error from PostCSS plugin. Your current PostCSS version is " + runtimeVer + ", but " + pluginName + " uses " + pluginVer + ". Perhaps this is the source of the error below."
-            );
-          }
-        }
+        if (false) ;
       }
     } catch (err) {
       if (console && console.error) console.error(err);
@@ -3782,13 +3751,6 @@ let LazyResult$2 = class LazyResult {
     return this.result;
   }
   then(onFulfilled, onRejected) {
-    if (process.env.NODE_ENV !== "production") {
-      if (!("from" in this.opts)) {
-        warnOnce$1(
-          "Without `from` option PostCSS could generate wrong source map and will not find Browserslist config. Set it to CSS file path or to `undefined` to prevent this warning."
-        );
-      }
-    }
     return this.async().then(onFulfilled, onRejected);
   }
   toString() {
@@ -3934,7 +3896,6 @@ let MapGenerator2 = mapGenerator;
 let parse$1 = parse_1;
 let Result$1 = result;
 let stringify$1 = stringify_1;
-let warnOnce2 = warnOnce$2;
 let NoWorkResult$1 = class NoWorkResult {
   get content() {
     return this.result.css;
@@ -4020,13 +3981,6 @@ let NoWorkResult$1 = class NoWorkResult {
     return this.result;
   }
   then(onFulfilled, onRejected) {
-    if (process.env.NODE_ENV !== "production") {
-      if (!("from" in this._opts)) {
-        warnOnce2(
-          "Without `from` option PostCSS could generate wrong source map and will not find Browserslist config. Set it to CSS file path or to `undefined` to prevent this warning."
-        );
-      }
-    }
     return this.async().then(onFulfilled, onRejected);
   }
   toString() {
@@ -4061,13 +4015,8 @@ let Processor$1 = class Processor {
         normalized.push(i);
       } else if (typeof i === "function") {
         normalized.push(i);
-      } else if (typeof i === "object" && (i.parse || i.stringify)) {
-        if (process.env.NODE_ENV !== "production") {
-          throw new Error(
-            "PostCSS syntaxes cannot be used as plugins. Instead, please use one of the syntax/parser/stringifier options as outlined in your PostCSS runner documentation."
-          );
-        }
-      } else {
+      } else if (typeof i === "object" && (i.parse || i.stringify)) ;
+      else {
         throw new Error(i + " is not a PostCSS plugin");
       }
     }
@@ -4121,11 +4070,6 @@ postcss.plugin = function plugin(name, initializer) {
       console.warn(
         name + ": postcss.plugin was deprecated. Migration guide:\nhttps://evilmartians.com/chronicles/postcss-8-plugin-migration"
       );
-      if (process.env.LANG && process.env.LANG.startsWith("zh")) {
-        console.warn(
-          name + ": 里面 postcss.plugin 被弃用. 迁移指南:\nhttps://www.w3ctech.com/topic/2226"
-        );
-      }
     }
     let transformer = initializer(...args);
     transformer.postcssPlugin = name;

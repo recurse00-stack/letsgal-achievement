@@ -1,6 +1,8 @@
 # 局内成就系统使用说明
 
-版本 0.1.2，发行修订 20261029-release.1。适用 LetsGal Studio 2.8.0-beta.1。本版采用展示阶段模型，不兼容 0.1.0 的激活方法与记录格式；升级前请备份工程，再按“数据、存档和更新”重新接入。
+0.1.3 为构建修复版：清理 CSS 解析依赖中的 Node 环境判断，修复相关语法错误提示。0.1.2 的配置、阶段记录和使用方式继续沿用。
+
+版本 0.1.3，发行修订 20261031-release.1。适用 LetsGal Studio 2.8.0-beta.1。本版采用展示阶段模型，不兼容 0.1.0 的激活方法与记录格式；升级前请备份工程，再按“数据、存档和更新”重新接入。
 
 ## 这个版本能做什么
 
@@ -16,9 +18,9 @@
 
 完整资料包同时包含插件、离线手册和 AI Skill。运行 `python tools/install-ai.py` 先查看安装位置，加 `--apply` 安装两份资料；已有不同内容时，再加 `--upgrade` 明确更新，原文件会先保全。插件主体仍在 Studio 中导入，不由资料安装器修改。
 
-本机已有 letsgal-authoring 时，Skill和手册分别位于用户目录下 `.letsgal-authoring/plugins/mixing-entropy.achievement/0.1.2/SKILL.md` 和同目录的 `docs/USER-GUIDE.html`。主技能通过插件索引读取Skill；人工使用直接打开手册。没有主技能时，安装器放入所选AI的独立插件Skill目录，路径以预览结果为准。
+本机已有 letsgal-authoring 时，Skill和手册分别位于用户目录下 `.letsgal-authoring/plugins/mixing-entropy.achievement/0.1.3/SKILL.md` 和同目录的 `docs/USER-GUIDE.html`。主技能通过插件索引读取Skill；人工使用直接打开手册。没有主技能时，安装器放入所选AI的独立插件Skill目录，路径以预览结果为准。
 
-本资料对应 0.1.2；使用旧版插件时请读取对应版本的手册与 Skill。
+本资料对应 0.1.3；使用旧版插件时请读取对应版本的手册与 Skill。
 
 ## 安装和启用
 

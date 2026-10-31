@@ -1,6 +1,6 @@
 # 适用版本与验证范围
 
-扩展 mixing-entropy.achievement，模块 main。主体版本 0.1.2，发行修订 20261029-release.1。清单 sdkVersion 为 ^2.8.0-beta.1，已有宿主证据来自 Studio 2.8.0-beta.1；Stable 未验证。本版直接使用阶段模型，不兼容旧激活接口和 active-only 记录。
+扩展 mixing-entropy.achievement，模块 main。主体版本 0.1.3，发行修订 20261031-release.1。清单 sdkVersion 为 ^2.8.0-beta.1，已有宿主证据来自 Studio 2.8.0-beta.1；Stable 未验证。本版直接使用阶段模型，不兼容旧激活接口和 active-only 记录。
 
 ## 验证范围
 

@@ -2,14 +2,14 @@
 name: letsgal-plugin-achievement
 description: 配置 LetsGal 局内成就系统 mixing-entropy.achievement 的阶段、等级、方法、卡片与浮现；不实现世界状态条件或宏。
 metadata:
-  version: 0.1.2
+  version: 0.1.3
   channel: beta
-  revision: 20261029-release.1
+  revision: 20261031-release.1
 ---
 
 # 局内成就系统
 
-用于扩展 `mixing-entropy.achievement`。本资料对应 **0.1.2 / 20261029-release.1**。先依据目标工程启用的扩展及实际接口选择资料；不能只看版本号。宿主证据来自 Studio **2.8.0-beta.1**，其他版本或通道的适配需另核，不自动升级。
+用于扩展 `mixing-entropy.achievement`。本资料对应 **0.1.3 / 20261031-release.1**。先依据目标工程启用的扩展及实际接口选择资料；不能只看版本号。宿主证据来自 Studio **2.8.0-beta.1**，其他版本或通道的适配需另核，不自动升级。
 
 ## 按任务读取
 
