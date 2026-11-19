@@ -1,10 +1,14 @@
 # 成就插件接口
 
-扩展 mixing-entropy.achievement，模块 main。主体版本 0.1.3，发行修订 20261031-release.1。清单 sdkVersion 为 ^2.8.0-beta.1，已有宿主证据来自 Studio 2.8.0-beta.1；Stable 未验证。本版直接使用阶段模型，不兼容旧激活接口和 active-only 记录。
+扩展 mixing-entropy.achievement，模块 main，版本 0.2.0。运行 SDK 与 Studio UI 均来自官方 Studio 3.0.0，清单要求 ^3.0.0。
 
 ## 作者定义
 
-定义保存在扩展结构化设置，运行记录在官方 profile 表。配置页自动写作者表、完整属性组和业务 Wiki 尚未实现；离线使用手册不是该业务 Wiki。条件、监听和宏由世界状态负责，本插件只提供成就操作；不以 Agent MCP 写表代替插件自身同步能力。
+`main.steamAchievements` 是可选关联列表，行结构为 `{achievementId, stageId, apiName}`。工作台按成就与阶段编号这一对键保存或清除一条关联。API Name 区分大小写，录入时去除首尾空白。各成就独立设置，绑定共用阶段无需覆盖其展示内容。
+
+main.groupCatalog 用同一结构化列表保存 group、member、binding 三种带稳定 id 的行。group 提供初始 visible、order、可选 level/card/popup；member 引用 group 和 achievement，order 表示组内顺序；binding 按 achievement 保存逐项来源 levelGroup/cardGroup/popupGroup 或直接引用。移出来源组时同批解除并固化引用。main.allowGroupFilter 默认关闭。main.stageTiers 的每项是 {achievementId,stageId,tier}，正整数同值表示同层；未配置层级的成就沿用原行为。已分层成就中，当前可用且缺行的阶段依次追加到各自的新最高层。编辑阶段前保留既有顺序，恢复同编号沿用已记录的层级。
+
+成就、阶段及表现定义存于官方扩展结构化设置。方法检查器和独立配置页读取同一份定义。世界状态负责外部条件、监听和宏。
 
 main.levels 为 {id,name,appearanceId?,popupAppearanceId?}[]，空数组使用铜银金。appearanceId 关联通用卡片方案，popupAppearanceId 关联通用浮现方案。main.achievements 为 {id,name,description,icon,levelId,initialStageId}[]。description 可空、换行，最多 1000 字符。initialStageId 默认 unknown。编号长期稳定；等级和初始阶段引用必须存在。配置错误拒绝业务写入。
 
@@ -16,32 +20,52 @@ levelMode 为 base（默认，使用成就基础等级）或 custom（指定本�
 
 方法检查器与运行时复用相同的阶段解析，仅为存在的成就列出其合并后的实际阶段；失效参数仅以说明提示，不插入选项，不自动改参数。变量指定成就时使用编号／变量输入。
 
-配置页的成就区域及各成就条目可折叠，逐项默认收起并提供全部展开／收起。折叠状态仅属编辑器组件，不写玩家记录。基础配置、展示阶段、阶段信息、阶段等级、本阶段内容和阶段表现可折叠；名称、说明与图标先显示沿用摘要，点击单独设置才展开。卡片／浮现只展开明确请求的内容、外观或时长控件，展开不写配置。
+配置页采用成就／属性配置／界面与浮现工作台。对象列表每页 50 项，搜索不改变选择；阶段始终使用选择块，超过 8 个默认单行，旁侧展开／收起，展开后可搜索。收起时保持当前选中阶段可见；初始阶段标记和右键移除保护不变。顶部独立缩放范围 75%—150%，默认与还原值 100%；只作用于工作台内容，控制条保持原大小。缩放、折叠、导航、选择与草稿只在本次编辑器会话保留，不进入配置或玩家记录。
 
-阶段编辑选择器支持按右键目标编号删除，菜单和按钮共用删除规则；初始阶段、最后可用阶段及失效目标拒绝。右键菜单锚定目标选项，打开和删除时保留列表展开；Esc 先关闭菜单，外部交互收起列表。选项使用浅边框，范围提示使用较小字号。专用删除只影响所属成就，共用删除保留已存在的完整专用配置。新成就可自填编号或自动生成，初始阶段优先 unknown，否则选首个实际阶段；已有初始阶段引用仍须有效。
+编辑器通过官方 useSetting/useParam 提交。文本、数值、CSS 约 500ms 去抖，失焦尝试提交；无效或被拒绝的输入保留为本次会话草稿。同字段外部更新暂停自动写入，明确核对后解决；对不同字段的更新合并以避免覆盖。正常状态仅显示“自动保存”，异常时显示草稿、拒绝或冲突；SDK 接受提交不等于磁盘保存完成。
+
+阶段块支持右键目标删除，按钮与菜单共用保护；初始／最后阶段受保护。专用删除只影响所属成就，共用删除保留完整专用配置。新建编号可自填或自动生成，已有稳定编号不改。
+
+等级、方案、成就、规则、优先值和元素 CSS 通过对象列表或当前编辑区提供右键及可见移除操作。菜单调用原删除保护；方案清理精确 CSS owner，失败尝试恢复；成就删除仍需确认。文本输入保留原生菜单。
+
+成就旁“查看关联图”打开只读关系图，初始布局以成就为中心向外放射。关系使用 resolveStages／resolvePresentation／materializePresentation／presentationPreset 的实际结果，按稳定身份合并共用阶段、等级、方案和界面。普通滚轮继续滚动工作台；图内 Ctrl＋滚轮以非被动事件阻止默认滚动／宿主缩放，只改变图视角。节点可拖动并带衰减弹簧牵引；单击显示摘要，双击或 Enter 定位已有编辑器。返回关联图保留视角、位置、展开和选择；它们只在 EditorSession 中保存，不进入设置或存档。概览中，完整沿用的阶段只连一个共用默认阶段；有专用内容、表现或 CSS 的阶段直接连接卡片、等级、浮现。默认阶段按需展开这三部分，三部分再按需展开方案、模板和界面；展开状态使用稳定节点身份保存。混合覆盖逐部分标记来源；专用阶段保留自身内容时不误标成实时沿用。默认等级为基础等级时，显示当前参考成就的解析结果。阶段每组 50 个，反向引用每页 20 个；收起来源不留下孤立反查节点。无输出的表现仍保留配置连线，并明确标记不输出。
+
+图中界面／模板双击进入只读引用详情及官方编排路径；UIRefPicker 展示实际引用。当前 Studio UI 3.0.0 未提供打开指定官方画布的编辑期 API，不通过 DOM 或私有宿主接口绕过。图中恢复布局只改变临时坐标，不恢复任何业务配置；双击定位不修改参数或玩家记录。
 
 ## 运行阶段记录
 
-states：contract letsgal.achievement.states，version ^2.0.0，runtime-write，profile。模板 contractVersion 2.0.0；schema 必需 achievementId:string、stageId:string，附带宿主 id，同一 achievementId 唯一。无记录时使用成就初始阶段。既有记录必须有 stageId，缺少时报错，不根据 active 推断。
+stageProgress 由 defineSave 声明为 shared/list。初始 [] 表示尚未建立；建立后为 [{schemaVersion:1,records:[{achievementId,stageId}]}]。records 为空也是已建立的进度。成就操作整体替换记录并读回，查询及卡片读取同一来源。
 
-profile 表按同一玩家档案跨剧情存档保留当前阶段。处理既有绑定时保留记录和稳定身份；不静默清表、改绑或以删除显示列代替契约变更。
+首次正常运行自动建立共享记录，无需选择进度来源或绑定数据表。仅使用 stageProgress，不读取旧数据集合。已建立的共享记录继续读取；结构或版本异常、重复编号会停止写入，失效引用原样保留。读档回放仅重建投影，不初始化或覆盖进度。
 
 只有当前 stageId 是业务状态；没有 active/status 字段、阶段激活标记、等级顺序推断或自动补低级记录。默认 hidden（隐藏）、unknown（未激活）、revealed（已激活）都是普通阶段。已有多余字段不参与查询或写入，新的记录只写成就身份和阶段。
 
 ## 方法
+
+`change-stage` 的普通执行与玩家快进在实际获得目标阶段、共享记录写入并读回后，才向可用的 `ctx.steam.achievements.unlock(apiName)` 提交。显式首次获得初始阶段也适用。读档恢复、`runImmediately`、同层或低层被拦截、重复当前阶段、预期不符和仅刷新页面均不会提交。只处理直接获得的目标。Steam 请求异步完成，失败保留本地记录，`queued` 由 SDK 负责重试。未启用分层时，重新切回一个阶段沿用自由切换语义，Steam 已解锁的项目由 SDK 返回 `already-unlocked`。
+
+3.0 中 group-visibility、change-stage、stage-info、refresh 和 notification-mode 声明 performanceSafe，可放入演出段。宿主时间轴不等待调用结果；需要按结果推进剧情时使用普通剧情方法。open-page 留在演出段外，作为等待玩家操作的模态页。回放重建跳过已关闭的页面；后续真实调用使用该次调用的读写接口。
 
 | localType | 参数 | 返回／作用 |
 | --- | --- | --- |
 | change-stage | achievementId:string, stageId:string, notify:boolean=true, expectedStageId:string='' | 无返回；目标切换，预期不符整项跳过，重复阶段不通知 |
 | stage-info | achievementId:string, field:stageId/stageName/levelId/levelName='stageId' | string；读取当前阶段或有效等级 |
 | open-page | 无 | 刷新并打开作者选择的页面 |
+| group-visibility | groupId:string, visible:boolean | 设置分组入口显示或隐藏；解锁及目前显隐通过 shared/list groupVisibility 保存 |
 | refresh | 无 | 只刷新投影，正常操作自动执行 |
+| notification-mode | action:read/toggle/sequential/merged/default='read' | string；返回当前 sequential/merged。开放玩家切换后可保存偏好；default 清除偏好 |
 
-全局类型为 mixing-entropy.achievement/localType。剧情 paramsJson 用 {kind:'lit',value:...} 或变量绑定；UI ext.call 用裸参数。读取返回固定 string，If 用文本比较。先验证目标再检查预期；同阶段首次操作仍固化初始值但不通知。方法 skip/runImmediately 静默更新；恢复回放 isRestoring 跳过写入和通知、仅刷新。
+全局类型为 mixing-entropy.achievement/localType。剧情 paramsJson 用 {kind:'lit',value:...} 或变量绑定；UI ext.call 用裸参数。读取返回固定 string，If 用文本比较。先验证目标再检查预期；未分层时同阶段首次操作仍固化初始值但不通知。已分层时，缺少成就记录表示首次获得；已有记录时只允许更高层。方法 skip/runImmediately 静默更新；恢复回放 isRestoring 跳过写入和通知、仅刷新。
 
-旧 activate/deactivate/is-active/set-display-stage/get-display-stage/operate/read-info 已移除。旧剧情必须替换，不能再依赖旧布尔返回。绑定旧 1.x 表不会自动迁移；仅隐藏 active 列不等于移除 schema 必填约束。
+自定义成就／阶段选择器显示 useParam 的 isInvalid、reason 和 rawValue；无效的可选 expectedStageId 也保持可见。不得在挂载、展开或切换入口时自动修复。仅明确选择才写入，setter 返回 false 时提示并保留原参数；明确选回无效参数所显示的默认值时用 setValue(undefined) 清除原值，避免原样写回被当作无操作。变量参数交给 ParamField，readOnly 时禁用选择。编号输入文案跟随 useInspectorEnvironment().canUseVariables：界面点击动作仅提示固定编号，允许变量的入口保留编号／变量文案。
+
+旧 activate/deactivate/is-active/set-display-stage/get-display-stage/operate/read-info 已移除。旧剧情必须替换，不能再依赖旧布尔返回。旧数据集合记录不自动迁移到扩展存档。
 
 ## 玩家投影和通知
+
+正式版中单条和汇总浮现使用 closeOnContextMenu=false，按播放时长结束；成就页沿用玩家的返回操作。
+
+成就页按钮 achievement-group-filter 切换「全部」和依序排列的可见分组。当前组仅过滤 entries，独立的浮现投影继续接收全部成就的有效通知。当前组隐藏后退回全部，可见的空组保留。
 
 mixing-entropy.achievement.entries 为 session list，仅提供 id,name,description,icon,iconMode,levelId,levelName,stageId,stageName,frame,cardBackground,appearance,elementCss。白名单投影当前允许内容；卡片配置为不生成卡片，或保存阶段失效时，不进入列表、不占页数。stageName 按 showStageName 提供；隐藏等级时 levelId/levelName 为空，但 appearance 仍按有效等级解析。未配置外观且不显示等级时使用默认中性边框；作者 stage-info 仍能读取有效等级。投影不回写运行记录。
 
@@ -49,7 +73,19 @@ mixing-entropy.achievement.entries 为 session list，仅提供 id,name,descript
 
 浮现内容可选标识为 achievement-name、achievement-description、achievement-icon、achievement-level、achievement-stage、achievement-label；外观标识为 achievement-background、achievement-frame、achievement-icon。label 固定“成就展示已更新”，其余取当前阶段的浮现专用投影。控件缺失兼容，不覆盖作者 hidden/visibleIf、排版或进退场动画。main.notifications 为全局开关；main.durationMs 默认 3000，范围 300–60000。
 
-阶段实际变化且 notify=true、全局开启、目标阶段浮现 enabled 时排一条通知。队列串行，播放前校验目标 stageId 并重读当前内容；离开目标阶段则结束／丢弃旧通知，不把新阶段内容套入旧界面。相同阶段不重复通知。浮现失败不回滚阶段记录；游戏结束释放队列和计时器。只记录当前阶段，不补播历史。
+阶段实际变化且 notify=true、全局开启、目标阶段浮现 enabled 时加入收集窗口。通知计时与播放不阻塞阶段写入。main.notificationWindowMs 默认500，范围50–5000毫秒；从第一条成功入队起固定计时，后续入队不延长。窗口结束前无任何浮现；封批后再到的通知进入下一批。各批通过同一串行队列播放，前批关闭后才播放后批。
+
+main.notificationMode 为 sequential（默认）或 merged；main.allowNotificationModeSwitch 默认false。main.notificationDurationPercent 默认67，范围10–100。批次开始收集时捕获方式、时长比例、排序规则、汇总界面与时长；已收集或播放的批次不被随后设置变化改编。播放前先读取当前内容，校验目标阶段及本次运行内的变化序号，去掉失效通知并按成就去重，只保留最后有效通知。随后一次确定批次成员、顺序和连续播放比例，再打开第一张界面。阶段来回变化后静默回到原阶段也不复活旧通知；变化序号只在内存，不加入保存契约。
+
+sequential：有效成就数超过1时，各条原停留时长乘以比例（包括第一条）；单条保留原时长。原时长仍按阶段专用／通用方案／全局300–60000毫秒解析；缩短结果取整毫秒，最短30毫秒，不改官方进退场动画。merged：有效成就数超过1时用 main.summaryUI，默认 ui:@mixing-entropy.achievement/achievement-summary；main.summaryDurationMs 默认3000、范围300–60000。只有1条时用阶段原浮现，0条不打开界面。
+
+main.notificationSort 为结构化平面行 {field:'level'|'stage'|'achievement',value:string}[]，最多30000项。属性首次出现的顺序是规则优先顺序，同属性行序是优先值顺序；空value只保留空规则，不参与排序，重复值去重。按规则依次比较，每条未列出的值并列靠后，全部相等时按首次接收顺序稳定排列。level 读取当前阶段实际等级，不依赖玩家投影中是否显示等级；stage 按目标阶段编号匹配，achievement 按成就编号匹配。失效引用不匹配、不改其他对象。独立设置页管理规则和优先值，无需填写JSON或比较表达式。
+
+汇总通过 session 字段 mixing-entropy.achievement.notificationCount:number 与 notificationEntries:list 输出；条目是排序后的浮现白名单投影，字段与 entries 一致，不输出作者基础资料或其他阶段。默认UI文字“解锁了 {{mixing-entropy.achievement.notificationCount}} 个成就”由作者自由改写，数字统计不同成就而不是独立解锁事实。官方列表来源 ext:mixing-entropy.achievement.notificationEntries。控制器不覆盖汇总作者文字、样式、位置与动画；关闭后清空计数和条目。显示中只移除离开通知阶段或关闭浮现的条目，不补入新批次；全部失效则关闭。
+
+玩家选择 notificationPreference 为 shared string，默认空；允许值 sequential/merged，空或无效值沿用创作者默认。关闭开放权限时忽略但保留原选择。notification-mode 仅在允许切换、非存档恢复时写偏好，其他情况返回实际方式；未知action拒绝。skip/runImmediately只读取，不切换。当前方式 notificationMode、中文名称 notificationModeLabel、是否允许切换 notificationCanSwitch 均为session投影，模块注册与方法调用时刷新，活动控制器另订阅作者默认与权限变化。自制设置页按钮使用 ext.call target=mixing-entropy.achievement/notification-mode，paramsJson={"action":"toggle"}（裸参数）；也可指定sequential/merged/default。按钮文字绑定 {{mixing-entropy.achievement.notificationModeLabel}}，visibleIf 使用游戏变量 mixing-entropy.achievement.notificationCanSwitch。原生switch的引擎设置bind列表不支持自定义插件值，使用可视化按钮承载切换，不伪造原生绑定键。
+
+重复获得、静默切换和存档恢复均不发通知。开启层级后，首次获得初始展示阶段也算有效获得。离开目标阶段时关闭旧浮现并等待 onClose，运行结束取消队列。队列、计时器及序号只在内存中维护；汇总计数和卡片列表是 session 投影。
 
 默认翻页／滚动只在官方 UI 编辑器设置：打开成就页，单击“双击编辑卡片 · 成就列表”，关闭“滚动模式”使用翻页，开启使用滚动。行、列、间距和列表大小也由官方页面保存。扩展不再提供另一份默认浏览设置，保存后重新打开游戏中的成就页生效。
 
@@ -68,7 +104,7 @@ mixing-entropy.achievement.entries 为 session list，仅提供 id,name,descript
 
 卡片内部统一使用官方手动模板，不提供编排模式选择和自动图文布局。扩展不自动重排位置、大小、字号或行数；阶段普通外观应用背景、边框、动效并测量尺寸参考，创作者另可显式使用元素 CSS 覆盖内容层样式。
 
-main.appearances 为统一存储的通用表现方案数组，界面分成“通用卡片展示”和“通用浮现”，不再显示独立共用外观入口。每项为 {id,name,surface,isDefault,...外观字段,nameMode,descriptionMode,iconMode,levelVisibility,stageNameVisibility,ui,durationMs}；surface=card|popup，每组最多一个 isDefault=true。名称／说明显示模式为 stage|none，图标另支持 unknown；不保存具体成就文字。levelVisibility/stageNameVisibility=stage|show|hide。浮现 ui 和 durationMs 决定通用界面、时长，0／空值回退原 main.popup/main.durationMs。卡片布局仍使用成就页的原生 card 模板，不按方案切换独立模板文档。
+main.appearances 为统一存储的通用表现方案数组，界面分成“卡片方案”和“浮现方案”，不再显示独立共用外观入口。每项为 {id,name,surface,isDefault,...外观字段,nameMode,descriptionMode,iconMode,levelVisibility,stageNameVisibility,ui,durationMs}；surface=card|popup，每组最多一个 isDefault=true。名称／说明显示模式为 stage|none，图标另支持 unknown；不保存具体成就文字。levelVisibility/stageNameVisibility=stage|show|hide。浮现 ui 和 durationMs 决定通用界面、时长，0／空值回退原 main.popup/main.durationMs。卡片布局仍使用成就页的原生 card 模板，不按方案切换独立模板文档。
 
 appearanceSource=default|local|preset|level。没有专用外观的阶段默认 default，引用对应 surface 的默认方案；local 完全独立，preset 使用 appearanceId，level 按有效等级读取卡片 appearanceId 或浮现 popupAppearanceId。跨 surface 的引用不应用外观或 CSS。overrideBackground/overrideFrame/overrideEffects 默认 false；default/preset/level 下按整个分段覆盖，关闭恢复实时跟随。具体阶段值不复制整套通用方案形成另一份来源；仅首次开启覆盖时捕获该分段。已有专用外观保持原值。
 
@@ -99,7 +135,7 @@ open-page 通过 ctx.extensionResource.url('ui/<name>.json') 读取本扩展自�
 
 原生单卡编辑器沿用双击列表入口，可在取消元素选中后的“界面属性 → 设计画布”修改宽高，不需要独立界面。修改画布不自动缩放或重排已有元素。当前设计宽高保存在 card 模板组的 rect.w/h；MCP 读取以 template.canvas 为准，templates[].canvas 是参考表。240×280不是固定尺寸或已确认的固定下限。列表行列、间距及区域变化目前不会自动更新该设计画布；扩展公开编辑期 SDK 未找到列表文档变更订阅／模板持久写回接口。Agent 的 ui_edit 能修改工程，不等同于发行插件自动能力。
 
-尺寸参考位于“界面与播放 → 成就页与卡片编排 → 成就卡片编排”。通过 open-page 打开的剧情预览测量实际单卡占位，并经公开 ctx.settings.set 写入 main.cardSizeReference（最多一条结构化记录）；配置页 useSetting 读取同一记录。包含页面、测量时间、浏览方式、实际占位／内容／网格宽高及作者行列、间距、列表和模板画布宽高。该记录只供作者参考，不参与布局和成就状态；Player 中设置写入仅在运行内存生效。尺寸变化去重并延迟250ms写入，页面关闭时撤销等待。换页面不显示其他页面的缓存；没有可见卡片或模板不支持时不生成新值。修改官方布局后须通过方法重新打开剧情预览，不能把旧时间的记录当成即时同步。建议画布与全卡背景／边框控件采用测得的占位尺寸，内部元素手动摆放；不改作者模板。
+尺寸参考位于“界面与浮现 → 卡片 → 成就卡片编排”。通过 open-page 打开的剧情预览测量实际单卡占位，并经公开 ctx.settings.set 写入 main.cardSizeReference（最多一条结构化记录）；配置页 useSetting 读取同一记录。包含页面、测量时间、浏览方式、实际占位／内容／网格宽高及作者行列、间距、列表和模板画布宽高。该记录只供作者参考，不参与布局和成就状态；Player 中设置写入仅在运行内存生效。尺寸变化去重并延迟250ms写入，页面关闭时撤销等待。换页面不显示其他页面的缓存；没有可见卡片或模板不支持时不生成新值。修改官方布局后须通过方法重新打开剧情预览，不能把旧时间的记录当成即时同步。建议画布与全卡背景／边框控件采用测得的占位尺寸，内部元素手动摆放；不改作者模板。
 
 装饰锚点／最小最大尺寸、逐元素行数和完整属性标签映射仍待补充。配置页直达编辑器仍待后续，不作为画布跟随的前置。
 
@@ -107,7 +143,9 @@ open-page 通过 ctx.extensionResource.url('ui/<name>.json') 读取本扩展自�
 
 ## 阶段表现与界面分层
 
-配置页顶层为成就管理、通用配置、界面与播放。阶段表现内并列卡片展示与阶段浮现，均使用官方模板编排；阶段内容是两者共同的默认内容，不与上一运行阶段发生继承。
+工作台顶部为成就、属性配置、界面与浮现。属性区含等级与默认阶段；界面区含成就页、卡片、浮现。卡片方案及模板尺寸归卡片；播放规则、合并汇总及浮现方案归浮现。每个设置一个主入口，引用处摘要与来源跳转，并可返回原选择。配置键、运行结构与继承算法不变。
+
+界面文案以当前操作为准：对象、来源与范围已经明确时省去重复解释；会影响操作结果的共用修改范围、初始阶段影响、未保存草稿、拒绝、冲突和删除保护继续提示。保存落盘机制、阶段继承与通知去重等完整说明集中在人工指南，不在正常状态栏重复展示。
 
 main.stagePresentations 是最多 10000 项的结构化平面数组，键为 achievementId + stageId + surface。achievementId 为空表示默认阶段；surface=card|popup；mode=custom|inherit。custom 行保存 contentOverride、enabled、nameMode/displayName、descriptionMode/description、iconMode/icon、showLevel、showStageName、ui、durationMs，以及原有外观与引用字段。内容模式 stage|custom|none，icon 另支持 unknown；stage 读取当前阶段基础内容，不读取另一种表现的专用内容。contentOverride=false 时沿用本阶段内容及所选方案显示规则；true 时整组内容规则使用本处专用值。已有未标记的专用行保留其内容规则。ui 为空、durationMs=0 优先沿用所选通用方案，再回退 main.popup/main.durationMs；自定时长 300～60000 毫秒。
 
@@ -123,7 +161,7 @@ main.elementCss 为结构化配置数组（最多 10000 行），每行 {id,owne
 
 解析顺序为阶段实际引用的外观、同编号默认阶段、当前成就阶段；各层先 both 后对应 surface。replace 清除该元素已累计的上级 CSS，空 replace 行可停用继承。阶段基础内容按完整阶段规则处理，卡片与浮现外观分别解析；CSS 单独按上述层级叠加，不继承前一个运行阶段。无对应实际阶段的 CSS 记录不参与投影。
 
-配置页默认显示沿用摘要，点击单独设置才展开内容或外观参数；提供保存前解析、覆盖属性列表、动效冲突提示和恢复继承。CSS 可写根声明、本元素状态与伪元素、& img、根级 @keyframes，不允许其它全局／嵌套规则、外部 URL、表达式或 --achievement-* 内部标记。保存草稿用“应用 CSS”；不能解析时保留草稿并阻止切换元素／用途。
+CSS 使用元素列表和代码区，显示 owner、使用位置与继承状态。CSS 支持根声明、本元素状态与伪元素、& img、根级 @keyframes；不允许全局选择器、外部 URL 或内部标记。约 500ms 校验提交，非法草稿可跨元素切换保留，只在本次会话有效。恢复某元素不恢复其他内容或表现。
 
 运行时给目标内容层唯一作用域并为关键帧改名，不写作者 UI 文件。普通根声明以 important 覆盖基础属性；参与关键帧的属性保留动画优先级。文字色彩／字体等同时覆盖原生文字 paint span。hover-only CSS 保留普通静止样式；关闭时移除作用域、样式表并恢复仍由适配器拥有的内联值。CSS 接管 animation/transition 或内置动效对应的 transform/opacity/filter 时只暂停该元素的内置附加动效。减少动画的媒体条件停用 CSS 动画与过渡。CSS 动画不继承内置动效的 loop/enter/hover 设置。
 
@@ -131,9 +169,9 @@ main.elementCss 为结构化配置数组（最多 10000 行），每行 {id,owne
 
 ## 验证范围
 
-2026-10-29 通用卡片／浮现两组方案完成时，100 项自动检查、类型检查和双入口构建通过，Studio 2.8.0-beta.1 核对了默认卡片方案。此后的方案删除 CSS 清理修复通过针对性组件检查、类型检查和编辑器构建，runtime 未变；不能称为修复后重跑了全量 100 项。新的浮现方案通知及配置页逐项原生操作未在该轮验收。
+插件面向 LetsGal Studio 3.0 正式版，开发使用 3.0.0 随包 SDK 和 Studio UI。使用 2.x 的作品请保留匹配宿主的插件版本，在工程副本中完成升级和存档检查。
 
-本版发行前的 Studio 证据覆盖三种浏览方式、尺寸参考、阶段外观、元素 CSS、独立浮现内容及默认值提示。素材样例覆盖卡片 GIF/APNG/动态 WebP 和浮现动态 WebP 的不同动画帧；不代表全部编码组合或导出通过。此前 0.1.1 的原生证据覆盖阶段显示与浮现、动态方法选项、共用／专用编辑、折叠及单成就阶段右键删除。新模型未验证独立 Player、普通／快速存读档、冷重开与导出。定义自动写作者表、完整属性组和 Wiki 尚未实现。
+Studio 3.0.0 已加载运行入口、创作工作台及六个剧情方法。Windows x64 独立 Player 已验证分组筛选、三种浏览方式的切组归位、快读及冷启动读旧普通档。Steam 关联通过模拟接口验证同层先到、跳层、读档回放与错误处理。真实账号解锁待使用作品 App ID 的桌面导出验收。其他系统的导出请按目标作品验证。
 
 ## 横向浏览适配
 

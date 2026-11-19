@@ -8,8 +8,8 @@
         "方法"
       ],
       "reference": "references/methods-and-state.md",
-      "source_sha256": "e19c3df3d6dcee0164c124483d4cbd8a851a6c7afea34ce4f92120b2930c2019",
-      "sha256": "4daa49ed63affa7abb59c0199fa3ed2f1e99d8497f474ef2767448bfd8f19e7c"
+      "source_sha256": "52f625522f5927a12fd952e3dde30ed0dce83a19c63bb3ab5937e6a47876f04c",
+      "sha256": "44fb67973fe8343111158a87a31cf1117f26dc00b9a586f1e1e4ff2fca1f8dd9"
     },
     {
       "source": "docs/CONTRACT.md",
@@ -18,8 +18,8 @@
         "阶段表现与界面分层"
       ],
       "reference": "references/stage-configuration.md",
-      "source_sha256": "e19c3df3d6dcee0164c124483d4cbd8a851a6c7afea34ce4f92120b2930c2019",
-      "sha256": "c78fcffc7046a5879a5cb2dd4b08fc55cee18130e324c2d3d8f3f2b326814d83"
+      "source_sha256": "52f625522f5927a12fd952e3dde30ed0dce83a19c63bb3ab5937e6a47876f04c",
+      "sha256": "81780fd825fb4073592a32710cfcaa263bdbb07109d3ac48787224af05a3c823"
     },
     {
       "source": "docs/CONTRACT.md",
@@ -28,8 +28,8 @@
         "横向浏览适配"
       ],
       "reference": "references/page-and-notifications.md",
-      "source_sha256": "e19c3df3d6dcee0164c124483d4cbd8a851a6c7afea34ce4f92120b2930c2019",
-      "sha256": "ff26146731c333183f64700ead0ed43bebb836e8b73cc18c66a4902b5b0ad9b8"
+      "source_sha256": "52f625522f5927a12fd952e3dde30ed0dce83a19c63bb3ab5937e6a47876f04c",
+      "sha256": "ee4f4db1041190bc3d4f51b8e8d9b18a35c3f7944e15eba2f3dfdba7e79ba793"
     },
     {
       "source": "docs/CONTRACT.md",
@@ -38,8 +38,8 @@
         "元素 CSS"
       ],
       "reference": "references/appearance-and-css.md",
-      "source_sha256": "e19c3df3d6dcee0164c124483d4cbd8a851a6c7afea34ce4f92120b2930c2019",
-      "sha256": "b3533421c9ff7443d98274825df14eb3def5fc2ed32b819e2ed21a85613d02ba"
+      "source_sha256": "52f625522f5927a12fd952e3dde30ed0dce83a19c63bb3ab5937e6a47876f04c",
+      "sha256": "2d0ae6d6bf554e9d75a628948070faba8966629415b8bfda20eb3d3f0b89f1e3"
     },
     {
       "source": "docs/CONTRACT.md",
@@ -47,14 +47,14 @@
         "验证范围"
       ],
       "reference": "references/compatibility.md",
-      "source_sha256": "e19c3df3d6dcee0164c124483d4cbd8a851a6c7afea34ce4f92120b2930c2019",
-      "sha256": "e26f05eadd02f2740036413d5f2e7379ae3f77001e23e637d8017c3c46563b92"
+      "source_sha256": "52f625522f5927a12fd952e3dde30ed0dce83a19c63bb3ab5937e6a47876f04c",
+      "sha256": "89df077c8c7bf968372a13fbdef741fdbd8717c73861c24728c394af94af8020"
     },
     {
       "source": "docs/CONTRACT.md",
       "sections": [],
       "reference": "references/CONTRACT.md",
-      "source_sha256": "e19c3df3d6dcee0164c124483d4cbd8a851a6c7afea34ce4f92120b2930c2019",
+      "source_sha256": "52f625522f5927a12fd952e3dde30ed0dce83a19c63bb3ab5937e6a47876f04c",
       "sha256": "50ee9fa6e4c688c9c9909a8a5f4c290a7f1b2b8d22205f7eb594e3f52fd420a5"
     }
   ]

@@ -3,6 +3,7 @@ import { parseAppearanceBinding, presentationPreset, resolveAppearance, type App
 import { parseElementCss, resolveElementCss, type CssOwner, type ElementCssRecord } from './element-css.ts';
 import type { Achievement, Catalog, Entry, StageTemplate } from './model.ts';
 
+import { effectiveDefaults, type GroupRow } from './groups.ts';
 export type Surface = 'card' | 'popup';
 export type PresentationMode = 'stage' | 'custom' | 'none';
 export interface StagePresentation extends Partial<CardAppearance>, AppearanceBinding {
@@ -56,6 +57,11 @@ export function resolvePresentation(rows: readonly StagePresentation[], defaults
   const authored = (base.appearanceSource && base.appearanceSource !== 'local') || Object.entries(optionalAppearance({ ...base })).some(([k, v]) => v !== CARD_DEFAULTS[k as keyof CardAppearance]);
   return { ...result, contentOverride: false, ...(authored ? {} : { appearanceSource: 'default' }) };
 }
+export function applyGroupScheme(p: StagePresentation, groups: GroupRow[], achievement: string): StagePresentation {
+  if (p.appearanceSource !== 'default') return p;
+  const preset = effectiveDefaults(groups, achievement)[p.surface];
+  return preset ? {...p, appearanceSource:'preset', appearanceId:preset} : p;
+}
 export function levelPresetId(level: Catalog['levels'][number] | undefined, surface: Surface): string {
   return (surface === 'popup' ? level?.popupAppearanceId ?? level?.appearanceId : level?.appearanceId) ?? '';
 }
@@ -96,7 +102,7 @@ export function resetSurfaceCss(rows: readonly ElementCssRecord[], achievementId
   return result;
 }
 export function projectPresentation(definitions: Catalog, item: Achievement, stage: StageTemplate, surface: Surface): Entry | undefined {
-  const raw = resolvePresentation(definitions.presentations ?? [], definitions.defaultStages, stage, item.id, surface);
+  const raw = applyGroupScheme(resolvePresentation(definitions.presentations ?? [], definitions.defaultStages, stage, item.id, surface), definitions.groups ?? [], item.id);
   const level = definitions.levels.find(l => l.id === (stage.levelMode === 'custom' ? stage.levelId : item.levelId));
   const p = materializePresentation(raw, definitions.appearances ?? [], levelPresetId(level, surface));
   if (!p.enabled) return undefined;

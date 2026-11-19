@@ -1,0 +1,29 @@
+{
+  "version": 2,
+  "name": "成就汇总浮现",
+  "hiddenInStudio": true,
+  "canvas": { "width": 1920, "height": 1080 },
+  "elements": [
+    {
+      "id": "achievement-summary-panel",
+      "type": "rect",
+      "name": "汇总底板",
+      "rect": { "x": 1320, "y": 64, "w": 536, "h": 126 },
+      "anchor": "c",
+      "style": { "fill": "#202833", "radius": 12, "borderColor": "#7b8998", "borderWidth": 1, "opacity": 100 },
+      "animation": { "enter": { "preset": "slide-left", "durationMs": 300, "distancePx": 48, "fade": true } },
+      "props": {}, "events": {}
+    },
+    {
+      "id": "achievement-summary-text",
+      "type": "text",
+      "name": "汇总文字（自由修改，保留数量变量）",
+      "rect": { "x": 1344, "y": 102, "w": 488, "h": 50 },
+      "anchor": "c",
+      "style": { "fontSize": 28, "color": "#f1f4f7", "textAlign": "center", "opacity": 100 },
+      "props": { "text": "解锁了 {{mixing-entropy.achievement.notificationCount}} 个成就" },
+      "animation": { "enter": { "preset": "slide-left", "durationMs": 300, "distancePx": 48, "fade": true } },
+      "events": {}
+    }
+  ]
+}

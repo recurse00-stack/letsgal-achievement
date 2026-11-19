@@ -19,12 +19,12 @@ export function parsePresetOptions(row: Record<string, unknown>): Partial<Appear
 }
 export function presentationPreset(binding: AppearanceBinding, presets: readonly AppearancePreset[], levelId = '', surface?: AppearanceSurface): AppearancePreset | undefined {
   const allowed = presets.filter(p => !surface || !p.surface || p.surface === surface);
-  if (binding.appearanceSource === 'default') return allowed.find(p => p.isDefault);
+  if ((binding.appearanceSource === 'default' || binding.appearanceSource === 'global')) return allowed.find(p => p.isDefault);
   const id = binding.appearanceSource === 'level' ? levelId : binding.appearanceSource === 'preset' ? binding.appearanceId : '';
   return id ? allowed.find(p => p.id === id) : undefined;
 }
 export interface AppearanceBinding {
-  appearanceSource?: 'local' | 'preset' | 'level' | 'default';
+  appearanceSource?: 'local' | 'preset' | 'level' | 'default' | 'global';
   appearanceId?: string;
   overrideBackground?: boolean; overrideFrame?: boolean; overrideEffects?: boolean;
 }
@@ -53,7 +53,7 @@ export function copyAppearanceGroup(value: Partial<CardAppearance>, group: keyof
 export function parseAppearanceBinding(row: Record<string, unknown>): AppearanceBinding {
   const result: AppearanceBinding = {};
   if (row.appearanceSource !== undefined) {
-    if (!['local', 'preset', 'level', 'default'].includes(String(row.appearanceSource))) throw Error('阶段外观来源无效');
+    if (!['local', 'preset', 'level', 'default', 'global'].includes(String(row.appearanceSource))) throw Error('阶段外观来源无效');
     result.appearanceSource = row.appearanceSource as AppearanceBinding['appearanceSource'];
   }
   if (row.appearanceId !== undefined) {

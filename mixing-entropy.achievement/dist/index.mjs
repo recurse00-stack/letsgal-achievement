@@ -47,6 +47,88 @@ var __privateSet = (obj, member, value, setter) => (__accessCheck(obj, member, "
 var __privateMethod = (obj, member, method) => (__accessCheck(obj, member, "access private method"), method);
 var _AchievementExtension_decorators, _init, _a;
 import { defineSave, Extension, settings, extension } from "@avg-studio/sdk";
+const DEFAULT_FIELDS = ["level", "card", "popup"];
+function sourceKey(field) {
+  return field === "level" ? "levelGroup" : field === "card" ? "cardGroup" : "popupGroup";
+}
+function orderedGroups(rows2) {
+  return rows2.filter((row) => row.kind === "group").sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+}
+function membersOf(rows2, group) {
+  return rows2.filter((row) => row.kind === "member" && row.group === group).sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+}
+function bindingOf(rows2, achievement) {
+  return rows2.find((row) => row.kind === "binding" && row.achievement === achievement);
+}
+function effectiveDefaults(rows2, achievement) {
+  var _a2;
+  const binding = bindingOf(rows2, achievement);
+  const result2 = {};
+  if (binding) for (const field of DEFAULT_FIELDS) {
+    const source = binding[sourceKey(field)];
+    result2[field] = source ? (_a2 = rows2.find((row) => row.kind === "group" && row.id === source)) == null ? void 0 : _a2[field] : binding[field];
+  }
+  return result2;
+}
+function isGroupVisible(group, state) {
+  var _a2;
+  return ((_a2 = state.find((row) => row.id === group.id)) == null ? void 0 : _a2.visible) ?? group.visible !== false;
+}
+function groupEntries(entries2, rows2, group) {
+  if (!group) return entries2;
+  const index = new Map(entries2.map((entry) => [entry.id, entry]));
+  return membersOf(rows2, group).flatMap((row) => {
+    const entry = index.get(row.achievement ?? "");
+    return entry ? [entry] : [];
+  });
+}
+function validateGroups(rows2) {
+  var _a2;
+  if (!Array.isArray(rows2)) throw Error("分组配置需要结构化列表。");
+  const groups = new Map(rows2.filter((g) => g.kind === "group").map((g) => [g.id, g]));
+  const ids = /* @__PURE__ */ new Set(), memberships = /* @__PURE__ */ new Set(), bindings = /* @__PURE__ */ new Set();
+  for (const row of rows2) {
+    if (!row.id || ids.has(row.id)) throw Error("分组记录编号无效或重复。");
+    ids.add(row.id);
+    if (row.kind === "group") continue;
+    if (!row.achievement) throw Error("分组记录缺少所属成就。");
+    if (row.kind === "member") {
+      const key = JSON.stringify([row.achievement, row.group]);
+      if (!groups.has(row.group ?? "") || memberships.has(key)) throw Error("成员关系重复或所属分组已删除。");
+      memberships.add(key);
+    } else if (row.kind === "binding" && !bindings.has(row.achievement)) bindings.add(row.achievement);
+    else throw Error("来源配置无效或重复。");
+  }
+  for (const row of rows2.filter((r) => r.kind === "binding")) for (const field of DEFAULT_FIELDS) {
+    const source = row[sourceKey(field)];
+    if (source && (!memberships.has(JSON.stringify([row.achievement, source])) || !((_a2 = groups.get(source)) == null ? void 0 : _a2[field])))
+      throw Error("成员关系或默认来源已变化，请重新选择来源组。");
+  }
+}
+const MAX_TIER = 5e4;
+function resolveTiers(achievementId, configured, stages) {
+  if (!configured.length) return configured;
+  const known = new Set(configured.map((row) => row.stageId));
+  const added = stages.filter((stage) => !known.has(stage.id));
+  if (!added.length) return configured;
+  let highest = configured.reduce((max, row) => Math.max(max, row.tier), 0);
+  let result2 = configured;
+  if (highest + added.length > MAX_TIER) {
+    const ordered = [...new Set(configured.map((row) => row.tier))].sort((a, b) => a - b);
+    const ranks = new Map(ordered.map((tier, index) => [tier, index + 1]));
+    result2 = configured.map((row) => ({ ...row, tier: ranks.get(row.tier) }));
+    highest = ordered.length;
+  }
+  return [...result2, ...added.map((stage, index) => ({ achievementId, stageId: stage.id, tier: highest + index + 1 }))];
+}
+function canGainStage(configured, target, acquired) {
+  if (!configured.length) return true;
+  const next = configured.find((row) => row.stageId === target);
+  if (!next) return false;
+  if (!acquired) return true;
+  const current = configured.find((row) => row.stageId === acquired);
+  return !!current && next.tier > current.tier;
+}
 const CARD_DEFAULTS = {
   backgroundMode: "template",
   backgroundColor: "",
@@ -137,7 +219,7 @@ function parsePresetOptions(row) {
 }
 function presentationPreset(binding, presets, levelId = "", surface) {
   const allowed = presets.filter((p) => !surface || !p.surface || p.surface === surface);
-  if (binding.appearanceSource === "default") return allowed.find((p) => p.isDefault);
+  if (binding.appearanceSource === "default" || binding.appearanceSource === "global") return allowed.find((p) => p.isDefault);
   const id2 = binding.appearanceSource === "level" ? levelId : binding.appearanceSource === "preset" ? binding.appearanceId : "";
   return id2 ? allowed.find((p) => p.id === id2) : void 0;
 }
@@ -158,7 +240,7 @@ function resolveAppearance(stage, presets, levelAppearanceId = "", surface) {
 function parseAppearanceBinding(row) {
   const result2 = {};
   if (row.appearanceSource !== void 0) {
-    if (!["local", "preset", "level", "default"].includes(String(row.appearanceSource))) throw Error("阶段外观来源无效");
+    if (!["local", "preset", "level", "default", "global"].includes(String(row.appearanceSource))) throw Error("阶段外观来源无效");
     result2.appearanceSource = row.appearanceSource;
   }
   if (row.appearanceId !== void 0) {
@@ -4321,6 +4403,11 @@ function resolvePresentation(rows2, defaults, stage, achievementId, surface) {
   const authored = base.appearanceSource && base.appearanceSource !== "local" || Object.entries(optionalAppearance({ ...base })).some(([k, v]) => v !== CARD_DEFAULTS[k]);
   return { ...result2, contentOverride: false, ...authored ? {} : { appearanceSource: "default" } };
 }
+function applyGroupScheme(p, groups, achievement) {
+  if (p.appearanceSource !== "default") return p;
+  const preset = effectiveDefaults(groups, achievement)[p.surface];
+  return preset ? { ...p, appearanceSource: "preset", appearanceId: preset } : p;
+}
 function levelPresetId(level, surface) {
   return (surface === "popup" ? (level == null ? void 0 : level.popupAppearanceId) ?? (level == null ? void 0 : level.appearanceId) : level == null ? void 0 : level.appearanceId) ?? "";
 }
@@ -4352,7 +4439,7 @@ function presentationCssOwners(p, stage, item, levels, presets) {
   ];
 }
 function projectPresentation(definitions, item, stage, surface) {
-  const raw = resolvePresentation(definitions.presentations ?? [], definitions.defaultStages, stage, item.id, surface);
+  const raw = applyGroupScheme(resolvePresentation(definitions.presentations ?? [], definitions.defaultStages, stage, item.id, surface), definitions.groups ?? [], item.id);
   const level = definitions.levels.find((l) => l.id === (stage.levelMode === "custom" ? stage.levelId : item.levelId));
   const p = materializePresentation(raw, definitions.appearances ?? [], levelPresetId(level, surface));
   if (!p.enabled) return void 0;
@@ -4424,7 +4511,8 @@ function mode(value, icon = false) {
   if (result2 === "base" || result2 === "custom" || result2 === "none" || icon && result2 === "unknown") return result2;
   throw new AchievementError("INVALID_DATA", "阶段内容来源无效");
 }
-function catalog(levelValues, achievementValues, stageValues = [], defaultStageValues = [], appearanceValues = [], cssValues = [], presentationValues = []) {
+function catalog(levelValues, achievementValues, stageValues = [], defaultStageValues = [], appearanceValues = [], cssValues = [], presentationValues = [], groups = [], tiers = []) {
+  validateGroups(groups);
   const appearances = unique(rows(appearanceValues).map((value) => {
     const row = object$2(value);
     return { ...optionalAppearance(row), ...parsePresetOptions(row), id: id(row.id), name: text(row.name, "外观名称") };
@@ -4436,7 +4524,7 @@ function catalog(levelValues, achievementValues, stageValues = [], defaultStageV
   }), "等级");
   const achievements = unique(rows(achievementValues).map((value) => {
     const row = object$2(value);
-    const achievement = { id: id(row.id), name: text(row.name, "成就名称"), description: text(row.description ?? "", "成就说明", true), icon: text(row.icon ?? "", "图标", true), levelId: id(row.levelId), initialStageId: row.initialStageId ? id(row.initialStageId) : "unknown" };
+    const achievement = { id: id(row.id), name: text(row.name, "成就名称"), description: text(row.description ?? "", "成就说明", true), icon: text(row.icon ?? "", "图标", true), levelId: id(effectiveDefaults(groups, id(row.id)).level || row.levelId), initialStageId: row.initialStageId ? id(row.initialStageId) : "unknown" };
     if (!levels.some((level) => level.id === achievement.levelId)) throw new AchievementError("LEVEL_NOT_FOUND", `成就 ${achievement.id} 的等级不存在`);
     return achievement;
   }), "成就");
@@ -4473,7 +4561,7 @@ function catalog(levelValues, achievementValues, stageValues = [], defaultStageV
     return { ...parseStage(row), achievementId, disabled: false };
   });
   if (new Set(stages.map((s) => s.achievementId + "/" + s.id)).size !== stages.length) throw new AchievementError("DUPLICATE_ID", "同一成就的阶段编号重复");
-  const result2 = { levels, achievements, stages, defaultStages, appearances, elementCss: parseCssRecords(cssValues), presentations: parsePresentations(presentationValues) };
+  const result2 = { groups, tiers, levels, achievements, stages, defaultStages, appearances, elementCss: parseCssRecords(cssValues), presentations: parsePresentations(presentationValues) };
   for (const item of achievements) if (item.initialStageId && !stagesFor(result2, item.id).some((s) => s.id === item.initialStageId)) throw new AchievementError("STAGE_NOT_FOUND", `成就 ${item.id} 的初始阶段不存在`);
   return result2;
 }
@@ -4501,7 +4589,7 @@ function currentStage(definitions, records, achievementId) {
 function stageRecords(value) {
   return unique(rows(value).map((value2) => {
     const row = object$2(value2);
-    if (typeof row.stageId !== "string" || !row.stageId.trim()) throw new AchievementError("INVALID_DATA", "记录缺少展示阶段编号，请使用新版阶段记录表");
+    if (typeof row.stageId !== "string" || !row.stageId.trim()) throw new AchievementError("INVALID_DATA", "记录缺少展示阶段编号");
     return { id: id(row.id), stageId: id(row.stageId) };
   }), "阶段记录");
 }
@@ -4516,11 +4604,16 @@ function entries(definitions, records, surface = "card") {
 function setDisplayStage(definitions, records, achievementId, target, expected = "") {
   if (typeof expected !== "string") throw new AchievementError("INVALID_DATA", "预期阶段必须为文本");
   const previous = currentStage(definitions, records, achievementId);
-  if (!stagesFor(definitions, achievementId).some((s) => s.id === target)) throw new AchievementError("STAGE_NOT_FOUND", `找不到展示阶段：${target}`);
+  const stages = stagesFor(definitions, achievementId);
+  if (!stages.some((s) => s.id === target)) throw new AchievementError("STAGE_NOT_FOUND", `找不到展示阶段：${target}`);
   if (expected && previous !== expected) return { changed: false, matched: false, records: records.map((r) => ({ ...r })) };
+  const acquired = records.find((row) => row.id === achievementId);
+  const tiers = resolveTiers(achievementId, (definitions.tiers ?? []).filter((row) => row.achievementId === achievementId), stages);
+  if (!canGainStage(tiers, target, acquired == null ? void 0 : acquired.stageId)) return { changed: false, matched: false, records: [...records] };
+  const firstTier = !acquired && tiers.length > 0;
   const next = records.filter((r) => r.id !== achievementId).map((r) => ({ ...r }));
   next.push({ id: achievementId, stageId: target });
-  return { changed: previous !== target, matched: true, records: next };
+  return { changed: previous !== target || !!firstTier, matched: true, records: next };
 }
 function readInfo(definitions, records, achievementId, field) {
   var _a2;
@@ -4539,6 +4632,55 @@ function readInfo(definitions, records, achievementId, field) {
       return ((_a2 = definitions.levels.find((l) => l.id === levelId)) == null ? void 0 : _a2.name) ?? "";
     default:
       throw new AchievementError("INVALID_DATA", "读取项目无效");
+  }
+}
+function decodeRows(rows2) {
+  if (!Array.isArray(rows2)) throw new AchievementError("INVALID_DATA", "成就阶段记录必须为列表");
+  return stageRecords(rows2.map((row) => ({ id: row == null ? void 0 : row.achievementId, stageId: row == null ? void 0 : row.stageId })));
+}
+function decodeSave(value) {
+  var _a2;
+  if (Array.isArray(value) && value.length === 0) return void 0;
+  if (!Array.isArray(value) || value.length !== 1 || ((_a2 = value[0]) == null ? void 0 : _a2.schemaVersion) !== 1)
+    throw new AchievementError("INVALID_DATA", "成就扩展存档结构或版本无法识别，已停止写入");
+  return decodeRows(value[0].records);
+}
+class StageProgress {
+  constructor(save, assertLive, restoring) {
+    this.save = save;
+    this.assertLive = assertLive;
+    this.restoring = restoring;
+    this.observed = JSON.stringify(save.get("stageProgress"));
+  }
+  changed() {
+    const current = JSON.stringify(this.save.get("stageProgress"));
+    if (current === this.observed) return false;
+    this.observed = current;
+    return true;
+  }
+  read() {
+    this.assertLive();
+    const current = decodeSave(this.save.get("stageProgress"));
+    if (current !== void 0) return current;
+    if (!this.restoring()) this.replace(void 0, []);
+    return [];
+  }
+  replace(previous, records) {
+    this.assertLive();
+    if (this.restoring()) throw new AchievementError("WRITE_CONFLICT", "读档恢复中，已停止写入成就阶段");
+    const before = this.save.get("stageProgress");
+    if (JSON.stringify(decodeSave(before)) !== JSON.stringify(previous))
+      throw new AchievementError("WRITE_CONFLICT", "成就进度已变化，请重新操作");
+    const valid = stageRecords(records);
+    const value = [{ schemaVersion: 1, records: valid.map(({ id: id2, stageId }) => ({ achievementId: id2, stageId })) }];
+    this.observed = JSON.stringify(value);
+    try {
+      this.save.set("stageProgress", value);
+      if (JSON.stringify(decodeSave(this.save.get("stageProgress"))) !== JSON.stringify(records))
+        throw new AchievementError("WRITE_CONFLICT", "成就进度写入后读回不一致");
+    } finally {
+      this.observed = JSON.stringify(this.save.get("stageProgress"));
+    }
   }
 }
 class NotificationQueue {
@@ -4579,6 +4721,45 @@ class NotificationQueue {
     }
   }
 }
+const clock = {
+  schedule: (fn, ms) => setTimeout(fn, ms),
+  cancel: (timer) => clearTimeout(timer)
+};
+class NotificationBatcher {
+  constructor(settings2, play, report, timers = clock) {
+    this.settings = settings2;
+    this.report = report;
+    this.timers = timers;
+    this.stopped = false;
+    this.queue = new NotificationQueue((batch, signal) => play(batch.items, batch.options, signal), report);
+  }
+  enqueue(item) {
+    if (this.stopped) return;
+    if (!this.collecting) {
+      let settings2;
+      try {
+        settings2 = this.settings();
+      } catch (error) {
+        this.report(error);
+        return;
+      }
+      const batch = { items: [], options: settings2.options, timer: void 0 };
+      this.collecting = batch;
+      batch.timer = this.timers.schedule(() => {
+        if (this.stopped || this.collecting !== batch) return;
+        this.collecting = void 0;
+        this.queue.enqueue({ items: batch.items.slice(), options: batch.options });
+      }, settings2.windowMs);
+    }
+    this.collecting.items.push(item);
+  }
+  stop() {
+    this.stopped = true;
+    if (this.collecting) this.timers.cancel(this.collecting.timer);
+    this.collecting = void 0;
+    this.queue.stop();
+  }
+}
 function delay(ms, signal) {
   return new Promise((resolve2) => {
     if (signal.aborted) {
@@ -4593,6 +4774,57 @@ function delay(ms, signal) {
     }
     signal.addEventListener("abort", done, { once: true });
   });
+}
+const NOTIFICATION_MODES = ["sequential", "merged"];
+const MODE_LABELS = { sequential: "连续浮现", merged: "合并浮现" };
+const SORT_LABELS = { level: "阶段等级", stage: "目标阶段", achievement: "成就" };
+function notificationMode(value) {
+  return value === "merged" ? "merged" : "sequential";
+}
+function effectiveNotificationMode(defaultMode, allowSwitch, preference) {
+  return allowSwitch === true && NOTIFICATION_MODES.includes(preference) ? preference : notificationMode(defaultMode);
+}
+function boundedNumber(value, fallback, min, max) {
+  return typeof value === "number" && Number.isFinite(value) ? Math.max(min, Math.min(max, value)) : fallback;
+}
+function parseNotificationRules(value) {
+  if (value === void 0) return [];
+  if (!Array.isArray(value) || value.length > 3e4) throw Error("浮现排序规则需要结构化列表，最多 30000 项");
+  const rules = /* @__PURE__ */ new Map();
+  for (const row of value) {
+    if (!row || typeof row !== "object" || !Object.prototype.hasOwnProperty.call(SORT_LABELS, row.field) || typeof row.value !== "string" || row.value.length > 128) throw Error("浮现排序规则无效");
+    let rule2 = rules.get(row.field);
+    if (!rule2) {
+      rule2 = { field: row.field, values: [] };
+      rules.set(row.field, rule2);
+    }
+    if (row.value && !rule2.values.includes(row.value)) rule2.values.push(row.value);
+  }
+  return [...rules.values()];
+}
+function orderNotifications(items, rules) {
+  const unique2 = /* @__PURE__ */ new Map();
+  items.forEach((item) => unique2.set(item.id, item));
+  const ranks = rules.map((rule2) => ({ field: rule2.field, values: new Map(rule2.values.map((id2, i) => [id2, i])) }));
+  return [...unique2.values()].map((item, index) => ({ item, index })).sort((a, b) => {
+    for (const rule2 of ranks) {
+      const key = rule2.field === "level" ? "levelId" : rule2.field === "stage" ? "stageId" : "id";
+      const diff = (rule2.values.get(a.item[key]) ?? Infinity) - (rule2.values.get(b.item[key]) ?? Infinity);
+      if (diff < 0 || diff > 0) return diff;
+    }
+    return a.index - b.index;
+  }).map((row) => row.item);
+}
+function notificationDuration(original, count, percent) {
+  const duration = boundedNumber(original, 3e3, 300, 6e4);
+  return Math.max(30, Math.round(duration * (count > 1 ? boundedNumber(percent, 67, 10, 100) / 100 : 1)));
+}
+function publishNotificationPreference(getSetting, store) {
+  const mode2 = effectiveNotificationMode(getSetting("notificationMode"), getSetting("allowNotificationModeSwitch"), store.get("notificationPreference"));
+  store.set("notificationMode", mode2);
+  store.set("notificationModeLabel", MODE_LABELS[mode2]);
+  store.set("notificationCanSwitch", getSetting("allowNotificationModeSwitch") === true);
+  return mode2;
 }
 const BROWSE_MODES = ["pagination", "scroll", "horizontal"];
 const BROWSE_LABELS = { pagination: "翻页", scroll: "纵向滚动", horizontal: "横向滚动" };
@@ -5331,6 +5563,7 @@ function sizeReferenceKey(reference) {
 }
 const PAGE = "@mixing-entropy.achievement/achievements";
 const POPUP = "@mixing-entropy.achievement/achievement-popup";
+const SUMMARY = "@mixing-entropy.achievement/achievement-summary";
 const runs = /* @__PURE__ */ new WeakMap();
 function controller(ctx, sink) {
   const signal = ctx.flow.signal;
@@ -5338,7 +5571,7 @@ function controller(ctx, sink) {
   if (!result2) {
     result2 = new AchievementController(ctx, sink, signal);
     runs.set(signal, result2);
-  }
+  } else result2.bindInvocation(ctx, sink);
   return result2;
 }
 class AchievementController {
@@ -5346,28 +5579,79 @@ class AchievementController {
     this.ctx = ctx;
     this.sink = sink;
     this.signal = signal;
+    this.generations = /* @__PURE__ */ new Map();
+    this.selectedGroup = "";
+    this.renderedGroup = "";
+    this.groupChoices = [];
     this.latest = [];
     this.latestPopups = [];
     this.tail = Promise.resolve();
     this.cleanups = [];
-    this.table = ctx.database.collection("states");
-    this.notifications = new NotificationQueue((item, abort) => this.popup(item, abort), (error) => console.error("[成就] 浮现失败，阶段记录已保留", error));
+    this.progress = new StageProgress({
+      get: (key) => this.sink.get(key),
+      set: (key, value) => this.sink.set(key, value)
+    }, () => this.assertLive(), () => this.ctx.flow.isRestoring);
+    this.notifications = new NotificationBatcher(() => ({
+      windowMs: boundedNumber(ctx.settings.get("notificationWindowMs"), 500, 50, 5e3),
+      options: {
+        mode: this.publishPreference(),
+        durationPercent: boundedNumber(ctx.settings.get("notificationDurationPercent"), 67, 10, 100),
+        rules: parseNotificationRules(ctx.settings.get("notificationSort")),
+        summaryUI: this.document("summaryUI", SUMMARY),
+        summaryDurationMs: boundedNumber(ctx.settings.get("summaryDurationMs"), 3e3, 300, 6e4)
+      }
+    }), (items, options2, abort) => this.playBatch(items, options2, abort), (error) => console.error("[成就] 浮现失败，阶段记录已保留", error));
     const refresh = () => {
       if (!signal.aborted) void this.refresh().catch((error) => console.error("[成就] 刷新失败", error));
     };
-    this.cleanups.push(this.table.watch(refresh));
+    let observedGroups = JSON.stringify(sink.get("groupVisibility"));
+    this.cleanups.push(ctx.subscribe("variable:changed", () => {
+      const visibility = JSON.stringify(this.sink.get("groupVisibility"));
+      const changed = this.progress.changed() || visibility !== observedGroups;
+      observedGroups = visibility;
+      if (changed) refresh();
+    }));
+    this.cleanups.push(...["groupCatalog", "allowGroupFilter", "stageTiers"].map((key) => ctx.settings.subscribe(key, refresh)));
     this.cleanups.push(ctx.settings.subscribe("levels", refresh), ctx.settings.subscribe("achievements", refresh), ctx.settings.subscribe("displayStages", refresh), ctx.settings.subscribe("defaultStages", refresh), ctx.settings.subscribe("appearances", refresh), ctx.settings.subscribe("elementCss", refresh), ctx.settings.subscribe("stagePresentations", refresh), ctx.settings.subscribe("notifications", refresh), ctx.settings.subscribe("popup", refresh), ctx.settings.subscribe("durationMs", refresh));
+    this.cleanups.push(ctx.settings.subscribe("notificationMode", () => this.publishPreference()), ctx.settings.subscribe("allowNotificationModeSwitch", () => this.publishPreference()));
+    this.publishPreference();
     const dispose = () => {
       var _a2;
       this.notifications.stop();
       (_a2 = this.page) == null ? void 0 : _a2.close();
+      this.sink.set("notificationEntries", []);
+      this.sink.set("notificationCount", 0);
       this.cleanups.splice(0).forEach((fn) => fn());
     };
     if (signal.aborted) dispose();
     else signal.addEventListener("abort", dispose, { once: true });
   }
+  // A restored call can share the flow signal with subsequent gameplay, but its
+  // save proxy retains replay write restrictions. Use the current invocation.
+  bindInvocation(ctx, sink) {
+    this.ctx = ctx;
+    this.sink = sink;
+  }
   assertLive() {
     if (this.signal.aborted || this.ctx.flow.signal !== this.signal) throw new AchievementError("RUN_ENDED", "本次游戏运行已结束");
+  }
+  publishPreference() {
+    return publishNotificationPreference((key) => this.ctx.settings.get(key), {
+      get: () => this.sink.get("notificationPreference"),
+      set: (key, value) => {
+        if (key === "notificationCanSwitch") this.sink.set(key, value === true);
+        else this.sink.set(key, String(value));
+      }
+    });
+  }
+  notificationMode(action = "read") {
+    this.assertLive();
+    if (!["read", "sequential", "merged", "toggle", "default"].includes(action)) throw new AchievementError("INVALID_DATA", "浮现方式操作无效");
+    const current = this.publishPreference();
+    if (action !== "read" && !this.ctx.flow.isRestoring && this.ctx.settings.get("allowNotificationModeSwitch") === true) {
+      this.sink.set("notificationPreference", action === "default" ? "" : action === "toggle" ? current === "merged" ? "sequential" : "merged" : action);
+    }
+    return this.publishPreference();
   }
   serial(fn) {
     const task = this.tail.then(() => {
@@ -5379,14 +5663,13 @@ class AchievementController {
   }
   definitions() {
     const levels = this.ctx.settings.get("levels") ?? [];
-    return catalog(levels.length ? levels : DEFAULT_LEVELS, this.ctx.settings.get("achievements") ?? [], this.ctx.settings.get("displayStages") ?? [], this.ctx.settings.get("defaultStages") ?? [], this.ctx.settings.get("appearances") ?? [], this.ctx.settings.get("elementCss") ?? [], this.ctx.settings.get("stagePresentations") ?? []);
+    return catalog(levels.length ? levels : DEFAULT_LEVELS, this.ctx.settings.get("achievements") ?? [], this.ctx.settings.get("displayStages") ?? [], this.ctx.settings.get("defaultStages") ?? [], this.ctx.settings.get("appearances") ?? [], this.ctx.settings.get("elementCss") ?? [], this.ctx.settings.get("stagePresentations") ?? [], this.ctx.settings.get("groupCatalog") ?? [], this.ctx.settings.get("stageTiers") ?? []);
   }
   async read() {
     const definitions = this.definitions();
-    const documents = await this.table.find();
+    const records = await this.progress.read();
     this.assertLive();
-    const records = stageRecords(documents.map((row) => ({ id: row.achievementId, stageId: row.stageId })));
-    return { definitions, documents, records };
+    return { definitions, records };
   }
   publish(definitions, records) {
     var _a2, _b;
@@ -5401,12 +5684,42 @@ class AchievementController {
       };
     });
     const result2 = prepare("card");
-    this.latest = result2;
+    this.latest = this.filterCards(result2, definitions.groups ?? []);
     this.latestPopups = prepare("popup");
-    this.sink.set("entries", result2);
+    this.sink.set("entries", this.latest);
     (_a2 = this.updatePopup) == null ? void 0 : _a2.call(this, this.latestPopups);
     (_b = this.cardLayout) == null ? void 0 : _b.refresh();
     return result2;
+  }
+  filterCards(cards, rows2) {
+    var _a2, _b;
+    const button = (_a2 = this.page) == null ? void 0 : _a2.get("achievement-group-filter");
+    const enabled = this.ctx.settings.get("allowGroupFilter") === true;
+    this.groupChoices = enabled && button ? orderedGroups(rows2).filter((g) => isGroupVisible(g, this.sink.get("groupVisibility") ?? [])) : [];
+    const group = this.groupChoices.find((g) => g.id === this.selectedGroup);
+    this.selectedGroup = (group == null ? void 0 : group.id) ?? "";
+    if (this.selectedGroup !== this.renderedGroup) {
+      this.renderedGroup = this.selectedGroup;
+      (_b = this.resetListPosition) == null ? void 0 : _b.call(this);
+    }
+    button == null ? void 0 : button.setHidden(!this.groupChoices.length);
+    button == null ? void 0 : button.setProps({ text: "分组 · " + ((group == null ? void 0 : group.name) ?? "全部") });
+    return groupEntries(cards, rows2, this.selectedGroup);
+  }
+  setGroupVisible(id2, visible) {
+    return this.serial(async () => {
+      var _a2;
+      if (this.ctx.flow.isRestoring) return;
+      const { definitions, records } = await this.read();
+      const group = (_a2 = definitions.groups) == null ? void 0 : _a2.find((row) => row.kind === "group" && row.id === id2);
+      if (!group || typeof visible !== "boolean") throw new AchievementError("INVALID_DATA", "请选择有效分组及可见性。");
+      const state = this.sink.get("groupVisibility") ?? [];
+      const previous = state.find((row) => row.id === id2);
+      const unlocked = visible || ((previous == null ? void 0 : previous.unlocked) ?? group.visible !== false);
+      if (!previous || previous.visible !== visible || previous.unlocked !== unlocked)
+        this.sink.set("groupVisibility", [...state.filter((row) => row.id !== id2), { id: id2, visible, unlocked }]);
+      this.publish(definitions, records);
+    });
   }
   refresh() {
     return this.serial(async () => {
@@ -5420,32 +5733,41 @@ class AchievementController {
       return readInfo(definitions, records, id2, field);
     });
   }
-  async write(documents, record) {
-    const existing = documents.find((row) => row.achievementId === record.id);
-    const fields = { stageId: record.stageId };
-    this.assertLive();
-    if (existing) {
-      const written = await this.table.updateOne({ id: existing.id }, { $set: fields });
-      if (written.matchedCount !== 1) throw new AchievementError("WRITE_CONFLICT", "成就记录已变化，请重新操作");
-    } else await this.table.insertOne({ achievementId: record.id, ...fields });
-    this.assertLive();
-  }
-  setStage(id2, target, expected = "", notify = false) {
+  setStage(id2, target, expected = "", notify = false, steam) {
+    const invocation = this.ctx;
+    const restoring = invocation.flow.isRestoring;
     return this.serial(async () => {
-      var _a2;
       if (typeof expected !== "string" || typeof notify !== "boolean") throw new AchievementError("INVALID_DATA", "阶段方法参数无效");
-      const { definitions, documents, records } = await this.read();
-      if (this.ctx.flow.isRestoring) {
+      const { definitions, records } = await this.read();
+      if (restoring || invocation.flow.isRestoring || this.ctx.flow.isRestoring) {
         this.publish(definitions, records);
         return false;
       }
       const change = setDisplayStage(definitions, records, id2, target, expected);
       if (!change.matched) return false;
-      if (change.changed || !((_a2 = records.find((r) => r.id === id2)) == null ? void 0 : _a2.stageId)) await this.write(documents, change.records.find((r) => r.id === id2));
+      const gained = change.changed || !records.some((r) => r.id === id2);
+      if (gained) this.progress.replace(records, change.records);
+      if (change.changed) this.generations.set(id2, (this.generations.get(id2) ?? 0) + 1);
       this.publish(definitions, change.records);
-      if (change.changed && notify && this.ctx.settings.get("notifications") !== false && this.latestPopups.some((r) => r.id === id2)) this.notifications.enqueue({ id: id2, stageId: target });
+      if (change.changed && notify && this.ctx.settings.get("notifications") !== false && this.latestPopups.some((r) => r.id === id2)) this.notifications.enqueue({ id: id2, stageId: target, generation: this.generations.get(id2) });
+      if (gained && steam) {
+        const bindings = invocation.settings.get("steamAchievements") ?? [];
+        const binding = Array.isArray(bindings) && bindings.find((row) => (row == null ? void 0 : row.achievementId) === id2 && row.stageId === target);
+        const apiName = binding && typeof binding.apiName === "string" ? binding.apiName.trim() : "";
+        if (apiName) void this.unlockSteam(steam, apiName);
+      }
       return true;
     });
+  }
+  async unlockSteam(steam, apiName) {
+    try {
+      if (!steam.isAvailable()) return;
+      const result2 = await steam.achievements.unlock(apiName);
+      if (!result2.ok && result2.reason !== "unavailable")
+        console.warn("[成就] Steam 解锁失败", apiName, result2.reason, result2.message ?? "");
+    } catch (error) {
+      console.warn("[成就] Steam 解锁失败", apiName, error);
+    }
   }
   getStage(id2) {
     return this.serial(async () => {
@@ -5454,6 +5776,7 @@ class AchievementController {
     });
   }
   async openPage() {
+    var _a2;
     await this.refresh();
     this.assertLive();
     if (this.page) return;
@@ -5466,6 +5789,25 @@ class AchievementController {
       return;
     }
     this.page = page;
+    this.selectedGroup = "";
+    this.renderedGroup = "";
+    const list2 = page.get("achievement-list");
+    let resetFrame = 0;
+    this.resetListPosition = () => {
+      if (!list2 || typeof requestAnimationFrame !== "function" || resetFrame) return;
+      list2.setHidden(true);
+      resetFrame = requestAnimationFrame(() => {
+        resetFrame = requestAnimationFrame(() => {
+          resetFrame = 0;
+          if (this.page === page) list2.setHidden(false);
+        });
+      });
+    };
+    const detachGroupFilter = (_a2 = page.get("achievement-group-filter")) == null ? void 0 : _a2.on("click", () => {
+      const options2 = ["", ...this.groupChoices.map((group) => group.id)];
+      this.selectedGroup = options2[(options2.indexOf(this.selectedGroup) + 1) % options2.length];
+      void this.refresh().catch((error) => console.error("[成就] 分组筛选失败", error));
+    });
     let template = [];
     if (document2) {
       try {
@@ -5505,12 +5847,21 @@ class AchievementController {
       allowHorizontal: this.ctx.settings.get("allowHorizontal")
     }, createHorizontalCards(page.get("achievement-list"), cardLayout.css));
     page.onClose(() => {
+      detachGroupFilter == null ? void 0 : detachGroupFilter();
+      if (resetFrame) cancelAnimationFrame(resetFrame);
       clearTimeout(sizeTimer);
       cardLayout.dispose();
       stopBrowsing();
       if (this.cardLayout === cardLayout) this.cardLayout = void 0;
-      if (this.page === page) this.page = void 0;
+      if (this.page === page) {
+        this.page = void 0;
+        this.resetListPosition = void 0;
+        this.selectedGroup = "";
+        this.renderedGroup = "";
+        if (!this.signal.aborted) void this.refresh().catch((error) => console.error("[成就] 页面关闭后刷新失败", error));
+      }
     });
+    await this.refresh();
   }
   async authoredPage(name) {
     const path = localTemplatePath(name);
@@ -5530,11 +5881,91 @@ class AchievementController {
     if (!/^(?:@[A-Za-z0-9_.-]+\/)?[A-Za-z0-9_-]+$/.test(value)) throw new AchievementError("INVALID_UI", `${key} 需要可视化界面的文件名或 @扩展编号/文件名`);
     return value;
   }
-  async popup(request, abort) {
+  eligible(request, list2) {
+    return this.ctx.settings.get("notifications") === false || request.generation !== this.generations.get(request.id) ? void 0 : list2.find((row) => row.id === request.id && row.stageId === request.stageId);
+  }
+  async playBatch(requests, options2, abort) {
+    if (abort.aborted || this.signal.aborted) return;
+    await this.refresh();
+    const definitions = this.definitions();
+    const batch = orderNotifications(requests.filter((item) => this.eligible(item, this.latestPopups)).map((item) => ({
+      ...item,
+      levelId: readInfo(definitions, [{ id: item.id, stageId: item.stageId }], item.id, "levelId")
+    })), options2.rules);
+    if (abort.aborted || !batch.length) return;
+    if (options2.mode === "merged" && batch.length > 1) {
+      await this.summary(batch, options2, abort);
+      return;
+    }
+    for (const item of batch) {
+      if (abort.aborted || this.signal.aborted) return;
+      try {
+        await this.popup(item, abort, batch.length, options2.durationPercent);
+      } catch (error) {
+        if (!abort.aborted) console.error("[成就] 浮现失败，继续播放下一条", error);
+      }
+    }
+  }
+  async summary(batch, options2, abort) {
+    let view;
+    let ended = false;
+    let finish = () => {
+    };
+    const closed = new Promise((resolve2) => {
+      finish = resolve2;
+    });
+    const timer = new AbortController();
+    const update = (list2) => {
+      const items = batch.flatMap((request) => {
+        const row = this.eligible(request, list2);
+        return row ? [row] : [];
+      });
+      this.sink.set("notificationEntries", items);
+      this.sink.set("notificationCount", items.length);
+      if (!items.length) {
+        ended = true;
+        if (view) view.close();
+        else finish();
+      }
+    };
+    this.updatePopup = update;
+    let detach = () => {
+    };
+    const end = () => {
+      ended = true;
+      view == null ? void 0 : view.close();
+      finish();
+    };
+    abort.addEventListener("abort", end, { once: true });
+    try {
+      update(this.latestPopups);
+      if (ended || abort.aborted) return;
+      view = await this.ctx.visualUI.open(options2.summaryUI, { modal: false, interactable: false, pointerEventsPassthrough: true, closeOnContextMenu: false });
+      if (ended || abort.aborted || this.signal.aborted) return;
+      detach = view.onClose(() => {
+        ended = true;
+        finish();
+      });
+      await Promise.race([delay(options2.summaryDurationMs, timer.signal), closed]);
+      if (!ended) view.close();
+      if (!abort.aborted) await closed;
+    } finally {
+      timer.abort();
+      abort.removeEventListener("abort", end);
+      detach();
+      if (this.updatePopup === update) this.updatePopup = void 0;
+      view == null ? void 0 : view.close();
+      if (this.ctx.flow.signal === this.signal) {
+        this.sink.set("notificationEntries", []);
+        this.sink.set("notificationCount", 0);
+      }
+    }
+  }
+  async popup(request, abort, batchSize, percent) {
     var _a2, _b;
     if (abort.aborted || this.signal.aborted) return;
     await this.refresh();
-    const eligible = (list2) => this.ctx.settings.get("notifications") === false ? void 0 : list2.find((row) => row.id === request.id && row.stageId === request.stageId);
+    const eligible = (list2) => this.eligible(request, list2);
     if (abort.aborted || !eligible(this.latestPopups) || this.ctx.settings.get("notifications") === false) return;
     const name = this.document("popup", POPUP, (_a2 = eligible(this.latestPopups)) == null ? void 0 : _a2.popupUI);
     const requestedDuration = ((_b = eligible(this.latestPopups)) == null ? void 0 : _b.popupDurationMs) || this.ctx.settings.get("durationMs");
@@ -5575,22 +6006,21 @@ class AchievementController {
       var _a3, _b2;
       if (!eligible(list2) || this.document("popup", POPUP, (_a3 = eligible(list2)) == null ? void 0 : _a3.popupUI) !== name || (((_b2 = eligible(list2)) == null ? void 0 : _b2.popupDurationMs) || this.ctx.settings.get("durationMs")) !== requestedDuration) {
         suppressed = true;
-        view == null ? void 0 : view.close();
-        end();
+        if (view) view.close();
+        else end();
       } else if (view && !suppressed) bind(view);
     };
     this.updatePopup = update;
     abort.addEventListener("abort", end, { once: true });
     try {
-      view = await this.ctx.visualUI.open(name, { modal: false, interactable: false, pointerEventsPassthrough: true });
+      view = await this.ctx.visualUI.open(name, { modal: false, interactable: false, pointerEventsPassthrough: true, closeOnContextMenu: false });
       if (abort.aborted || this.signal.aborted || suppressed || !eligible(this.latestPopups)) return;
       bind(view);
       detachClose = view.onClose(() => {
         closed = true;
         resolveClosed();
       });
-      const configured = requestedDuration;
-      const duration = typeof configured === "number" && Number.isFinite(configured) ? Math.max(300, Math.min(6e4, configured)) : 3e3;
+      const duration = notificationDuration(requestedDuration, batchSize, percent);
       await Promise.race([delay(duration, timerAbort.signal), closedPromise]);
       if (!closed) view.close();
       if (!abort.aborted) await closedPromise;
@@ -5631,7 +6061,7 @@ const appearanceFields = (i) => ({
 });
 const stageFields = (i) => ({
   ...appearanceFields(i),
-  appearanceSource: i.enum("外观配置", ["local", "preset", "level", "default"]).default("local"),
+  appearanceSource: i.enum("外观配置", ["local", "preset", "level", "default", "global"]).default("local"),
   appearanceId: i.string("共用外观编号").default(""),
   overrideBackground: i.boolean("单独配置背景").default(false),
   overrideFrame: i.boolean("单独配置边框").default(false),
@@ -5651,15 +6081,51 @@ const stageFields = (i) => ({
   showStageName: i.boolean("向玩家显示阶段名称").default(false)
 });
 const viewSave = defineSave({
+  groupVisibility: { type: "list", persistence: "shared", default: [], label: "分组解锁与显隐" },
+  stageProgress: { type: "list", persistence: "shared", default: [], label: "玩家当前成就阶段" },
   entries: { type: "list", persistence: "session", default: [], label: "成就界面数据（自动重建）" },
-  browseMode: { type: "string", persistence: "shared", default: "", label: "成就浏览选择" }
+  browseMode: { type: "string", persistence: "shared", default: "", label: "成就浏览选择" },
+  notificationPreference: { type: "string", persistence: "shared", default: "", label: "玩家浮现方式选择" },
+  notificationMode: { type: "string", persistence: "session", default: "sequential", label: "当前浮现方式" },
+  notificationModeLabel: { type: "string", persistence: "session", default: "连续浮现", label: "当前浮现方式名称" },
+  notificationCanSwitch: { type: "boolean", persistence: "session", default: false, label: "允许玩家切换浮现方式" },
+  notificationEntries: { type: "list", persistence: "session", default: [], label: "本批汇总成就（仅当前允许内容）" },
+  notificationCount: { type: "number", persistence: "session", default: 0, label: "本批汇总成就数量" }
 });
 _AchievementExtension_decorators = [extension({ id: "main", label: "成就", exposeUI: false })];
 let _AchievementExtension = class _AchievementExtension extends (_a = Extension.withSave(viewSave)) {
+  static onRegister(ctx) {
+    publishNotificationPreference((key) => ctx.settings.get(key), {
+      get: (key) => ctx.variables.get("mixing-entropy.achievement." + key),
+      set: (key, value) => ctx.variables.set("mixing-entropy.achievement." + key, value)
+    });
+  }
 };
 _init = __decoratorStart(_a);
 _AchievementExtension = __decorateElement(_init, 0, "AchievementExtension", _AchievementExtension_decorators, _AchievementExtension);
 _AchievementExtension.settings = settings((s) => ({
+  allowGroupFilter: s.boolean("允许玩家按分组筛选").default(false),
+  groupCatalog: s.array("分组与成员", (i) => ({
+    id: i.string("记录编号"),
+    kind: i.enum("记录类型", ["group", "member", "binding"]),
+    name: i.string("组名").default(""),
+    visible: i.boolean("初始显示").default(true),
+    order: i.number("顺序").default(0),
+    group: i.string("所属组").default(""),
+    achievement: i.string("所属成就").default(""),
+    level: i.string("等级").default(""),
+    card: i.string("卡片方案").default(""),
+    popup: i.string("浮现方案").default(""),
+    levelGroup: i.string("等级来源组").default(""),
+    cardGroup: i.string("卡片来源组").default(""),
+    popupGroup: i.string("浮现来源组").default("")
+  })).maxItems(5e4),
+  stageTiers: s.array("阶段层级", (i) => ({ achievementId: i.string("成就编号"), stageId: i.string("阶段编号"), tier: i.number("层级").range(1, MAX_TIER) })).maxItems(5e4),
+  steamAchievements: s.array("展示阶段关联的 Steam 成就", (i) => ({
+    achievementId: i.string("成就编号"),
+    stageId: i.string("阶段编号"),
+    apiName: i.string("Steamworks API Name")
+  })).maxItems(5e4),
   stagePresentations: s.array("阶段表现", (i) => ({
     achievementId: i.string("成就编号；空值为默认阶段").default(""),
     stageId: i.string("阶段编号"),
@@ -5678,7 +6144,7 @@ _AchievementExtension.settings = settings((s) => ({
     ui: i.string("浮现界面；空值沿用全局").default(""),
     durationMs: i.number("时长；0沿用全局").default(0).range(0, 6e4),
     ...appearanceFields(i),
-    appearanceSource: i.enum("外观配置", ["local", "preset", "level", "default"]).default("local"),
+    appearanceSource: i.enum("外观配置", ["local", "preset", "level", "default", "global"]).default("local"),
     appearanceId: i.string("共用外观编号").default(""),
     overrideBackground: i.boolean("单独配置背景").default(false),
     overrideFrame: i.boolean("单独配置边框").default(false),
@@ -5749,12 +6215,35 @@ _AchievementExtension.settings = settings((s) => ({
   allowHorizontal: s.boolean("额外开放横向滚动").default(false).enabledWhen("allowPlayerSwitch", true),
   popup: s.uiRef("默认浮现界面").default("ui:" + POPUP).describe("可编辑默认浮现界面，或填写自己的可视化界面引用。"),
   notifications: s.boolean("允许播放阶段浮现").default(true),
-  durationMs: s.number("默认浮现时长（毫秒）").default(3e3).range(300, 6e4).step(100)
+  durationMs: s.number("默认浮现时长（毫秒）").default(3e3).range(300, 6e4).step(100),
+  notificationMode: s.enum("默认浮现方式", ["sequential", "merged"]).labels({ sequential: "连续浮现", merged: "合并浮现" }).default("sequential"),
+  allowNotificationModeSwitch: s.boolean("允许玩家切换浮现方式").default(false).describe("开放后可在自制设置页调用“浮现方式”方法；玩家选择跨存档保留。"),
+  notificationWindowMs: s.number("批次收集时间（毫秒）").default(500).range(50, 5e3).step(50).describe("先收集再播放；首条也等待。收集期间不延长窗口，封批后的通知进入下一批。"),
+  notificationDurationPercent: s.number("连续浮现停留时长比例（%）").default(67).range(10, 100).step(1),
+  notificationSort: s.array("浮现属性排序", (i) => ({ field: i.enum("比较属性", ["level", "stage", "achievement"]), value: i.string("优先值编号；空值保留空规则").default("") })).maxItems(3e4).describe("按属性首次出现顺序比较；同属性按值的行序优先，未列出值并列靠后。由独立设置页编排。"),
+  summaryUI: s.uiRef("汇总浮现界面").default("ui:" + SUMMARY),
+  summaryDurationMs: s.number("汇总停留时长（毫秒）").default(3e3).range(300, 6e4).step(100)
 }));
+_AchievementExtension.groupVisibility = _AchievementExtension.method({
+  performanceSafe: true,
+  id: "group-visibility",
+  title: "设置分组可见性",
+  schema: { groupId: { type: "string", label: "分组", required: true }, visible: { type: "boolean", label: "显示分组", default: true } },
+  async run(ctx, p) {
+    await controller(ctx, this.save).setGroupVisible(p.groupId, p.visible);
+  },
+  async skip(ctx, p) {
+    await controller(ctx, this.save).setGroupVisible(p.groupId, p.visible);
+  },
+  async runImmediately(ctx, p) {
+    await controller(ctx, this.save).setGroupVisible(p.groupId, p.visible);
+  }
+});
 _AchievementExtension.changeStage = _AchievementExtension.method({
+  performanceSafe: true,
   id: "change-stage",
   title: "成就操作",
-  description: "先选成就，再选择目标展示阶段。可选预期当前阶段与浮现；相同阶段不重复通知，通常自动刷新。",
+  description: "先选成就，再选择目标展示阶段。可选预期当前阶段与浮现；按层级获得时只向更高层推进；同层先到者保留。",
   schema: {
     achievementId: { type: "string", label: "成就", required: true },
     stageId: { type: "string", label: "目标展示阶段", required: true },
@@ -5762,16 +6251,17 @@ _AchievementExtension.changeStage = _AchievementExtension.method({
     expectedStageId: { type: "string", label: "仅在此阶段执行（留空不限制）", default: "" }
   },
   async run(ctx, p) {
-    await controller(ctx, this.save).setStage(p.achievementId, p.stageId, p.expectedStageId, p.notify);
+    await controller(ctx, this.save).setStage(p.achievementId, p.stageId, p.expectedStageId, p.notify, ctx.steam);
   },
   async skip(ctx, p) {
-    await controller(ctx, this.save).setStage(p.achievementId, p.stageId, p.expectedStageId, false);
+    await controller(ctx, this.save).setStage(p.achievementId, p.stageId, p.expectedStageId, false, ctx.steam);
   },
   async runImmediately(ctx, p) {
     await controller(ctx, this.save).setStage(p.achievementId, p.stageId, p.expectedStageId, false);
   }
 });
 _AchievementExtension.stageInfo = _AchievementExtension.method({
+  performanceSafe: true,
   id: "stage-info",
   title: "读取成就信息",
   description: "读取当前展示阶段或其等级；统一返回文本。阶段名称与金银铜名称不产生额外状态判断。",
@@ -5789,18 +6279,45 @@ _AchievementExtension.openPage = _AchievementExtension.method({
   title: "打开成就页",
   description: "重建界面数据，然后打开作者选择的成就页。",
   async run(ctx) {
-    await controller(ctx, this.save).openPage();
+    if (!ctx.flow.isRestoring) await controller(ctx, this.save).openPage();
   },
   async skip(ctx) {
-    await controller(ctx, this.save).refresh();
+    if (!ctx.flow.isRestoring) await controller(ctx, this.save).refresh();
+  },
+  // A past modal in the reconstructed story was already closed by the player.
+  runImmediately() {
   }
 });
 _AchievementExtension.refresh = _AchievementExtension.method({
+  performanceSafe: true,
   id: "refresh",
   title: "刷新成就界面数据",
   description: "通常会自动刷新：切换阶段和打开成就页时都会更新界面数据。仅在自制界面需要主动更新时调用；不会改变成就状态。",
   async run(ctx) {
     await controller(ctx, this.save).refresh();
+  }
+});
+_AchievementExtension.notificationMode = _AchievementExtension.method({
+  performanceSafe: true,
+  id: "notification-mode",
+  title: "浮现方式",
+  description: "读取或切换连续／合并浮现，供自制设置页调用。创作者开放切换后才保存玩家选择；已开始收集的批次保持原方式。",
+  returns: { type: "string", label: "当前方式（sequential / merged）" },
+  schema: { action: { type: "enum", label: "操作", default: "read", options: [
+    { value: "read", label: "读取当前方式" },
+    { value: "toggle", label: "切换到另一种方式" },
+    { value: "sequential", label: "选择连续浮现" },
+    { value: "merged", label: "选择合并浮现" },
+    { value: "default", label: "恢复创作者默认方式" }
+  ] } },
+  run(ctx, p) {
+    return controller(ctx, this.save).notificationMode(p.action);
+  },
+  skip(ctx) {
+    return controller(ctx, this.save).notificationMode("read");
+  },
+  runImmediately(ctx) {
+    return controller(ctx, this.save).notificationMode("read");
   }
 });
 __runInitializers(_init, 1, _AchievementExtension);

@@ -1,56 +1,10 @@
 {
   "id": "mixing-entropy.achievement",
   "name": "局内成就系统",
-  "description": "自定义展示阶段、阶段等级、自由设计卡片与浮现、三种浏览方式",
+  "description": "自定义成就分组、展示阶段、卡片与浮现，可按阶段关联 Steam 成就。",
   "author": "mixing-entropy",
-  "version": "0.1.3",
+  "version": "0.2.0",
   "entry": "dist/index.mjs",
   "studioEntry": "dist/studio.js",
-  "sdkVersion": "^2.8.0-beta.1",
-  "dataDependencies": {
-    "states": {
-      "contract": "letsgal.achievement.states",
-      "version": "^2.0.0",
-      "name": "成就展示阶段记录",
-      "description": "同一玩家档案内跨存档保存当前 stageId；使用阶段记录契约 2.0.0。",
-      "access": "runtime-write",
-      "optional": false,
-      "autoCreate": {
-        "name": "成就展示阶段记录",
-        "contractVersion": "2.0.0",
-        "runtimePolicy": "profile",
-        "schema": {
-          "type": "object",
-          "properties": {
-            "achievementId": {
-              "type": "string"
-            },
-            "stageId": {
-              "type": "string",
-              "description": "当前展示阶段稳定编号"
-            }
-          },
-          "required": [
-            "achievementId",
-            "stageId"
-          ],
-          "additionalProperties": true,
-          "columns": [
-            {
-              "key": "achievementId",
-              "label": "成就编号",
-              "type": "text"
-            },
-            {
-              "key": "stageId",
-              "label": "展示阶段编号",
-              "type": "text"
-            }
-          ],
-          "titleColumn": "achievementId"
-        },
-        "documents": []
-      }
-    }
-  }
+  "sdkVersion": "^3.0.0"
 }

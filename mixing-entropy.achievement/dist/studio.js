@@ -1,7 +1,89 @@
-import { jsxs, Fragment, jsx } from "react/jsx-runtime";
-import { useSetting, Section, FieldRow, ColorPicker, AssetPicker, Select as Select$1, TextInput, Switch, Button, SettingField, UIRefPicker, NumberSlider, ParamField, useParam, useInspectorEnvironment, Panel } from "@avg-studio/studio-ui";
-import { useState, useRef, useEffect } from "react";
-import { createListCollection, Select, Portal, Menu } from "@chakra-ui/react";
+import { jsx, jsxs, Fragment } from "react/jsx-runtime";
+import { createContext, useState, useContext, useSyncExternalStore, useRef, useMemo, useEffect, useId } from "react";
+import { useSetting as useSetting$1, Button, Switch, Select, useInspectorEnvironment, ParamField, useParam, UIRefPicker, ImagePreview, ColorPicker, AssetPicker, NumberSlider, TextInput as TextInput$1 } from "@avg-studio/studio-ui";
+import { Menu, Portal } from "@chakra-ui/react";
+const DEFAULT_FIELDS = ["level", "card", "popup"];
+function sourceKey(field) {
+  return field === "level" ? "levelGroup" : field === "card" ? "cardGroup" : "popupGroup";
+}
+function orderedGroups(rows2) {
+  return rows2.filter((row) => row.kind === "group").sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+}
+function membersOf(rows2, group) {
+  return rows2.filter((row) => row.kind === "member" && row.group === group).sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+}
+function bindingOf(rows2, achievement) {
+  return rows2.find((row) => row.kind === "binding" && row.achievement === achievement);
+}
+function effectiveDefaults(rows2, achievement) {
+  var _a;
+  const binding = bindingOf(rows2, achievement);
+  const result2 = {};
+  if (binding) for (const field of DEFAULT_FIELDS) {
+    const source = binding[sourceKey(field)];
+    result2[field] = source ? (_a = rows2.find((row) => row.kind === "group" && row.id === source)) == null ? void 0 : _a[field] : binding[field];
+  }
+  return result2;
+}
+function updateBinding(rows2, achievement, change) {
+  const binding = bindingOf(rows2, achievement);
+  return binding ? rows2.map((row) => row === binding ? { ...row, ...change } : row) : [...rows2, { id: "binding:" + achievement, kind: "binding", achievement, ...change }];
+}
+function detachGroup(rows2, group, options2 = {}) {
+  return rows2.flatMap((row) => {
+    if (options2.achievement && row.achievement !== options2.achievement) return [row];
+    if (row.kind === "binding") {
+      const next = { ...row };
+      for (const field of options2.clear ? [options2.clear] : DEFAULT_FIELDS) {
+        if (next[sourceKey(field)] !== group.id) continue;
+        next[field] = group[field] ?? "";
+        next[sourceKey(field)] = "";
+      }
+      return [next];
+    }
+    if (options2.clear) return [row === group ? { ...row, [options2.clear]: "" } : row];
+    return row.id === group.id || row.kind === "member" && row.group === group.id ? [] : [row];
+  });
+}
+function validateGroups(rows2) {
+  var _a;
+  if (!Array.isArray(rows2)) throw Error("分组配置需要结构化列表。");
+  const groups = new Map(rows2.filter((g) => g.kind === "group").map((g) => [g.id, g]));
+  const ids = /* @__PURE__ */ new Set(), memberships = /* @__PURE__ */ new Set(), bindings = /* @__PURE__ */ new Set();
+  for (const row of rows2) {
+    if (!row.id || ids.has(row.id)) throw Error("分组记录编号无效或重复。");
+    ids.add(row.id);
+    if (row.kind === "group") continue;
+    if (!row.achievement) throw Error("分组记录缺少所属成就。");
+    if (row.kind === "member") {
+      const key = JSON.stringify([row.achievement, row.group]);
+      if (!groups.has(row.group ?? "") || memberships.has(key)) throw Error("成员关系重复或所属分组已删除。");
+      memberships.add(key);
+    } else if (row.kind === "binding" && !bindings.has(row.achievement)) bindings.add(row.achievement);
+    else throw Error("来源配置无效或重复。");
+  }
+  for (const row of rows2.filter((r) => r.kind === "binding")) for (const field of DEFAULT_FIELDS) {
+    const source = row[sourceKey(field)];
+    if (source && (!memberships.has(JSON.stringify([row.achievement, source])) || !((_a = groups.get(source)) == null ? void 0 : _a[field])))
+      throw Error("成员关系或默认来源已变化，请重新选择来源组。");
+  }
+}
+const MAX_TIER = 5e4;
+function resolveTiers(achievementId, configured, stages) {
+  if (!configured.length) return configured;
+  const known = new Set(configured.map((row) => row.stageId));
+  const added = stages.filter((stage) => !known.has(stage.id));
+  if (!added.length) return configured;
+  let highest = configured.reduce((max, row) => Math.max(max, row.tier), 0);
+  let result2 = configured;
+  if (highest + added.length > MAX_TIER) {
+    const ordered = [...new Set(configured.map((row) => row.tier))].sort((a, b) => a - b);
+    const ranks = new Map(ordered.map((tier, index) => [tier, index + 1]));
+    result2 = configured.map((row) => ({ ...row, tier: ranks.get(row.tier) }));
+    highest = ordered.length;
+  }
+  return [...result2, ...added.map((stage, index) => ({ achievementId, stageId: stage.id, tier: highest + index + 1 }))];
+}
 const CARD_DEFAULTS = {
   backgroundMode: "template",
   backgroundColor: "",
@@ -78,7 +160,7 @@ function parsePresetOptions(row) {
 }
 function presentationPreset(binding, presets, levelId = "", surface) {
   const allowed = presets.filter((p) => !surface || !p.surface || p.surface === surface);
-  if (binding.appearanceSource === "default") return allowed.find((p) => p.isDefault);
+  if (binding.appearanceSource === "default" || binding.appearanceSource === "global") return allowed.find((p) => p.isDefault);
   const id2 = binding.appearanceSource === "level" ? levelId : binding.appearanceSource === "preset" ? binding.appearanceId : "";
   return id2 ? allowed.find((p) => p.id === id2) : void 0;
 }
@@ -103,7 +185,7 @@ function copyAppearanceGroup(value, group) {
 function parseAppearanceBinding(row) {
   const result2 = {};
   if (row.appearanceSource !== void 0) {
-    if (!["local", "preset", "level", "default"].includes(String(row.appearanceSource))) throw Error("阶段外观来源无效");
+    if (!["local", "preset", "level", "default", "global"].includes(String(row.appearanceSource))) throw Error("阶段外观来源无效");
     result2.appearanceSource = row.appearanceSource;
   }
   if (row.appearanceId !== void 0) {
@@ -4236,6 +4318,11 @@ function resolvePresentation(rows2, defaults, stage, achievementId, surface) {
   const authored = base.appearanceSource && base.appearanceSource !== "local" || Object.entries(optionalAppearance({ ...base })).some(([k, v]) => v !== CARD_DEFAULTS[k]);
   return { ...result2, contentOverride: false, ...authored ? {} : { appearanceSource: "default" } };
 }
+function applyGroupScheme(p, groups, achievement) {
+  if (p.appearanceSource !== "default") return p;
+  const preset = effectiveDefaults(groups, achievement)[p.surface];
+  return preset ? { ...p, appearanceSource: "preset", appearanceId: preset } : p;
+}
 function levelPresetId(level, surface) {
   return (surface === "popup" ? (level == null ? void 0 : level.popupAppearanceId) ?? (level == null ? void 0 : level.appearanceId) : level == null ? void 0 : level.appearanceId) ?? "";
 }
@@ -4294,6 +4381,32 @@ function resetSurfaceCss(rows2, achievementId, stageId, surface) {
   }
   return result2;
 }
+function projectPresentation(definitions, item, stage, surface) {
+  const raw = applyGroupScheme(resolvePresentation(definitions.presentations ?? [], definitions.defaultStages, stage, item.id, surface), definitions.groups ?? [], item.id);
+  const level = definitions.levels.find((l) => l.id === (stage.levelMode === "custom" ? stage.levelId : item.levelId));
+  const p = materializePresentation(raw, definitions.appearances ?? [], levelPresetId(level, surface));
+  if (!p.enabled) return void 0;
+  const content = (mode2, base, custom) => mode2 === "base" ? base : mode2 === "custom" ? custom : "";
+  const stageName = content(stage.nameMode, item.name, stage.displayName);
+  const stageDescription = content(stage.descriptionMode, item.description, stage.description);
+  const select = (mode2, shared, own) => mode2 === "stage" ? shared : mode2 === "custom" ? own : "";
+  const iconMode = p.iconMode === "stage" ? stage.iconMode : p.iconMode;
+  const levelId = stage.levelMode === "custom" ? stage.levelId : item.levelId;
+  return {
+    id: item.id,
+    stageId: stage.id,
+    name: select(p.nameMode, stageName, p.displayName),
+    description: select(p.descriptionMode, stageDescription, p.description),
+    iconMode,
+    icon: p.iconMode === "stage" ? content(stage.iconMode, item.icon, stage.icon) : p.iconMode === "custom" ? p.icon : "",
+    levelId: p.showLevel ? levelId : "",
+    levelName: p.showLevel ? (level == null ? void 0 : level.name) ?? "" : "",
+    stageName: p.showStageName ? stage.name : "",
+    appearance: resolveAppearance(p, definitions.appearances ?? [], levelPresetId(level, surface), surface),
+    elementCss: resolveElementCss(definitions.elementCss ?? [], presentationCssOwners(p, stage, item, definitions.levels, definitions.appearances)).filter((r) => r.surface === surface),
+    ...surface === "popup" ? { popupUI: p.ui, popupDurationMs: p.durationMs } : {}
+  };
+}
 class AchievementError extends Error {
   constructor(code, message) {
     super(message);
@@ -4301,7 +4414,7 @@ class AchievementError extends Error {
     this.name = "AchievementError";
   }
 }
-function object$1(value) {
+function object$2(value) {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new AchievementError("INVALID_DATA", "需要结构化对象");
   return value;
 }
@@ -4341,24 +4454,25 @@ function mode(value, icon = false) {
   if (result2 === "base" || result2 === "custom" || result2 === "none" || icon && result2 === "unknown") return result2;
   throw new AchievementError("INVALID_DATA", "阶段内容来源无效");
 }
-function catalog(levelValues, achievementValues, stageValues = [], defaultStageValues = [], appearanceValues = [], cssValues = [], presentationValues = []) {
+function catalog(levelValues, achievementValues, stageValues = [], defaultStageValues = [], appearanceValues = [], cssValues = [], presentationValues = [], groups = [], tiers = []) {
+  validateGroups(groups);
   const appearances = unique(rows(appearanceValues).map((value) => {
-    const row = object$1(value);
+    const row = object$2(value);
     return { ...optionalAppearance(row), ...parsePresetOptions(row), id: id(row.id), name: text(row.name, "外观名称") };
   }), "共用外观");
   for (const surface of ["card", "popup"]) if (appearances.filter((p) => p.isDefault && p.surface === surface).length > 1) throw new AchievementError("INVALID_DATA", "每组只能有一个默认表现方案");
   const levels = unique(rows(levelValues).map((value) => {
-    const row = object$1(value);
+    const row = object$2(value);
     return { id: id(row.id), name: text(row.name, "等级名称"), ...row.appearanceId ? { appearanceId: id(row.appearanceId) } : {}, ...row.popupAppearanceId ? { popupAppearanceId: id(row.popupAppearanceId) } : {} };
   }), "等级");
   const achievements = unique(rows(achievementValues).map((value) => {
-    const row = object$1(value);
-    const achievement = { id: id(row.id), name: text(row.name, "成就名称"), description: text(row.description ?? "", "成就说明", true), icon: text(row.icon ?? "", "图标", true), levelId: id(row.levelId), initialStageId: row.initialStageId ? id(row.initialStageId) : "unknown" };
+    const row = object$2(value);
+    const achievement = { id: id(row.id), name: text(row.name, "成就名称"), description: text(row.description ?? "", "成就说明", true), icon: text(row.icon ?? "", "图标", true), levelId: id(effectiveDefaults(groups, id(row.id)).level || row.levelId), initialStageId: row.initialStageId ? id(row.initialStageId) : "unknown" };
     if (!levels.some((level) => level.id === achievement.levelId)) throw new AchievementError("LEVEL_NOT_FOUND", `成就 ${achievement.id} 的等级不存在`);
     return achievement;
   }), "成就");
   const parseStage = (value) => {
-    const row = object$1(value);
+    const row = object$2(value);
     const levelMode = row.levelMode ?? "base";
     if (levelMode !== "base" && levelMode !== "custom") throw new AchievementError("INVALID_DATA", "阶段等级方式无效");
     const levelId = row.levelId ? id(row.levelId) : "";
@@ -4383,14 +4497,14 @@ function catalog(levelValues, achievementValues, stageValues = [], defaultStageV
   };
   const defaultStages = unique(defaultsFor(rows(defaultStageValues).map(parseStage)), "默认阶段");
   const stages = rows(stageValues).map((value) => {
-    const row = object$1(value);
+    const row = object$2(value);
     const achievementId = id(row.achievementId);
     const disabled = bool(row.disabled, false);
     if (disabled) return { ...presetStages(achievementId)[1], id: id(row.id), disabled: true };
     return { ...parseStage(row), achievementId, disabled: false };
   });
   if (new Set(stages.map((s) => s.achievementId + "/" + s.id)).size !== stages.length) throw new AchievementError("DUPLICATE_ID", "同一成就的阶段编号重复");
-  const result2 = { levels, achievements, stages, defaultStages, appearances, elementCss: parseCssRecords(cssValues), presentations: parsePresentations(presentationValues) };
+  const result2 = { groups, tiers, levels, achievements, stages, defaultStages, appearances, elementCss: parseCssRecords(cssValues), presentations: parsePresentations(presentationValues) };
   for (const item of achievements) if (item.initialStageId && !stagesFor(result2, item.id).some((s) => s.id === item.initialStageId)) throw new AchievementError("STAGE_NOT_FOUND", `成就 ${item.id} 的初始阶段不存在`);
   return result2;
 }
@@ -4409,127 +4523,1510 @@ function stagesFor(definitions, achievementId) {
   if (!definitions.achievements.some((item) => item.id === achievementId)) return [];
   return resolveStages(achievementId, definitions.defaultStages, definitions.stages);
 }
-function StagePicker({ value, stages, onChange, removalReason, onRemove, shared = false }) {
-  const [open, setOpen] = useState(false);
-  const [target, setTarget] = useState(null);
-  const listRef = useRef(null);
-  const menuRef = useRef(null);
-  const returnToList = () => requestAnimationFrame(() => {
-    var _a;
-    return (_a = listRef.current) == null ? void 0 : _a.focus({ preventScroll: true });
-  });
-  const collection = createListCollection({ items: stages.map((s) => ({ value: s.id, label: `${s.name}（${s.id}）` })) });
-  const pointed = stages.find((s) => s.id === (target == null ? void 0 : target.id));
-  const reason = pointed ? removalReason(pointed.id) : "此阶段已不存在。";
-  const colors = { bg: "var(--bg-canvas)", color: "var(--fg-primary)", borderColor: "var(--border-default)" };
-  const optionFrame = { borderWidth: "1px", borderStyle: "solid", borderColor: "var(--border-subtle, var(--border-default))", borderRadius: "4px" };
-  return /* @__PURE__ */ jsxs(Fragment, { children: [
-    /* @__PURE__ */ jsxs(
-      Select.Root,
-      {
-        collection,
-        value: value ? [value] : [],
-        open,
-        onOpenChange: (e) => {
-          setOpen(e.open);
-          if (!e.open) setTarget(null);
-        },
-        onInteractOutside: (event) => {
-          var _a;
-          if ((_a = menuRef.current) == null ? void 0 : _a.contains(event.detail.target)) event.preventDefault();
-        },
-        onValueChange: (e) => {
-          if (e.value[0]) onChange(e.value[0]);
-        },
-        positioning: { sameWidth: true },
-        children: [
-          /* @__PURE__ */ jsxs(Select.Trigger, { ...colors, "aria-label": shared ? "编辑默认阶段" : "编辑阶段", children: [
-            /* @__PURE__ */ jsx(Select.ValueText, { placeholder: "请选择阶段" }),
-            /* @__PURE__ */ jsx(Select.Indicator, {})
-          ] }),
-          /* @__PURE__ */ jsx(Portal, { children: /* @__PURE__ */ jsx(Select.Positioner, { children: /* @__PURE__ */ jsx(Select.Content, { ref: listRef, "data-studio-user-content": true, ...colors, borderWidth: "1px", borderStyle: "solid", maxH: "320px", overflowY: "auto", children: collection.items.map((option) => /* @__PURE__ */ jsxs(
-            Select.Item,
-            {
-              item: option,
-              title: option.label,
-              ...optionFrame,
-              my: "2px",
-              color: "var(--fg-primary)",
-              bg: (target == null ? void 0 : target.id) === option.value ? "var(--bg-subtle)" : void 0,
-              _highlighted: { bg: "var(--bg-subtle)", borderColor: "var(--border-default)" },
-              onContextMenu: (event) => {
-                event.preventDefault();
-                event.stopPropagation();
-                setTarget({ id: option.value, row: event.currentTarget });
-              },
-              children: [
-                /* @__PURE__ */ jsx(Select.ItemText, { truncate: true, children: option.label }),
-                /* @__PURE__ */ jsx(Select.ItemIndicator, {})
-              ]
-            },
-            option.value
-          )) }) }) })
-        ]
+class DraftStore {
+  constructor() {
+    this.drafts = /* @__PURE__ */ new Map();
+    this.ui = /* @__PURE__ */ new Map();
+    this.listeners = /* @__PURE__ */ new Set();
+    this.version = 0;
+    this.rejected = "";
+    this.subscribe = (fn) => {
+      this.listeners.add(fn);
+      return () => {
+        this.listeners.delete(fn);
+      };
+    };
+    this.snapshot = () => this.version;
+  }
+  emit() {
+    this.version++;
+    this.listeners.forEach((fn) => fn());
+  }
+  edit(key, value, current) {
+    const previous = this.drafts.get(key);
+    if (value === current && (previous == null ? void 0 : previous.state) !== "conflict") this.drafts.delete(key);
+    else this.drafts.set(key, { base: (previous == null ? void 0 : previous.base) ?? current, value, state: (previous == null ? void 0 : previous.state) === "conflict" ? "conflict" : "pending", message: (previous == null ? void 0 : previous.state) === "conflict" ? previous.message : "" });
+    this.emit();
+  }
+  observe(key, current) {
+    const draft = this.drafts.get(key);
+    if (!draft) return;
+    if (current === draft.value) {
+      this.drafts.delete(key);
+      this.emit();
+    } else if (current !== draft.base && draft.state !== "conflict") {
+      draft.state = "conflict";
+      draft.message = "此项已在外部更新；请核对后选择保留草稿或使用最新值。";
+      this.emit();
+    }
+  }
+  commit(key, current, validate, save) {
+    this.observe(key, current);
+    const draft = this.drafts.get(key);
+    if (!draft || draft.state === "conflict") return false;
+    const error = validate(draft.value);
+    if (error) {
+      draft.state = "invalid";
+      draft.message = error;
+      this.emit();
+      return false;
+    }
+    try {
+      this.rejected = "";
+      const ok = save(draft.value);
+      if (ok === false || this.rejected) {
+        draft.state = "rejected";
+        draft.message = this.rejected || "保存被拒绝，草稿仍保留。";
+      } else this.drafts.delete(key);
+      this.emit();
+      return ok !== false && !this.rejected;
+    } catch (error2) {
+      draft.state = "invalid";
+      draft.message = String(error2);
+      this.emit();
+      return false;
+    }
+  }
+  acceptCurrent(key) {
+    this.drafts.delete(key);
+    this.emit();
+  }
+  keepDraft(key, current) {
+    const d = this.drafts.get(key);
+    if (d) {
+      d.base = current;
+      d.state = "pending";
+      d.message = "";
+      this.emit();
+    }
+  }
+  discardScope(prefix) {
+    for (const key of this.drafts.keys()) if (key.startsWith(prefix + "/")) this.drafts.delete(key);
+    this.emit();
+  }
+}
+const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+const object$1 = (v) => !!v && typeof v === "object" && !Array.isArray(v);
+function rowKey(v) {
+  if (!object$1(v)) return void 0;
+  if ("stageId" in v && "surface" in v) return JSON.stringify([v.achievementId, v.stageId, v.surface]);
+  if ("stageId" in v && ("tier" in v || "apiName" in v)) return JSON.stringify([v.achievementId, v.stageId]);
+  if ("id" in v) return JSON.stringify([v.achievementId, v.id]);
+  return void 0;
+}
+function rebaseSetting(base, next, latest) {
+  if (same(base, latest) || same(next, latest)) return next;
+  if (same(base, next)) return latest;
+  if (object$1(base) && object$1(next) && object$1(latest)) {
+    const result2 = { ...latest };
+    for (const key of /* @__PURE__ */ new Set([...Object.keys(base), ...Object.keys(next)])) if (!same(base[key], next[key])) {
+      if (!(key in next)) {
+        if (!same(latest[key], base[key])) throw Error("此项已在外部更新，请核对后重试。");
+        delete result2[key];
+      } else result2[key] = rebaseSetting(base[key], next[key], latest[key]);
+    }
+    return result2;
+  }
+  if (Array.isArray(base) && Array.isArray(next) && Array.isArray(latest) && [...base, ...next, ...latest].every((v) => rowKey(v) !== void 0)) {
+    const result2 = [...latest];
+    for (const old of base) if (!next.some((v) => rowKey(v) === rowKey(old))) {
+      const index = result2.findIndex((v) => rowKey(v) === rowKey(old));
+      if (index >= 0) {
+        if (!same(result2[index], old)) throw Error("要删除的对象已在外部修改，请核对后重试。");
+        result2.splice(index, 1);
       }
-    ),
-    /* @__PURE__ */ jsx(
+    }
+    for (const value of next) {
+      const old = base.find((v) => rowKey(v) === rowKey(value));
+      if (same(old, value)) continue;
+      const index = result2.findIndex((v) => rowKey(v) === rowKey(value));
+      if (index < 0) {
+        if (old) throw Error("编辑对象已被移除；草稿保留。");
+        result2.push(value);
+      } else result2[index] = rebaseSetting(old, value, result2[index]);
+    }
+    return result2;
+  }
+  throw Error("此项已在外部更新，请核对后重试。");
+}
+class Session extends DraftStore {
+  constructor() {
+    super(...arguments);
+    this.settings = /* @__PURE__ */ new Map();
+  }
+  observeSetting(name, raw) {
+    const found = this.settings.get(name);
+    if (!found || JSON.stringify(found.raw) !== JSON.stringify(raw)) this.settings.set(name, { raw, latest: raw });
+  }
+}
+const Context = createContext(null);
+const Scope = createContext("workbench");
+function EditorSession({ children }) {
+  const [store] = useState(() => new Session());
+  return /* @__PURE__ */ jsx(Context.Provider, { value: store, children });
+}
+function EditorScope({ id: id2, children }) {
+  const parent = useContext(Scope);
+  return /* @__PURE__ */ jsx(Scope.Provider, { value: parent + "/" + id2, children });
+}
+function useSession() {
+  return useContext(Context);
+}
+function useEditorState(key, initial) {
+  const store = useContext(Context), scope = useContext(Scope), id2 = scope + "/" + key;
+  const [local, setLocal] = useState(initial);
+  useSyncExternalStore((store == null ? void 0 : store.subscribe) ?? noopSubscribe, (store == null ? void 0 : store.snapshot) ?? zero);
+  const value = store ? store.ui.has(id2) ? store.ui.get(id2) : initial : local;
+  return [value, (next) => {
+    const v = typeof next === "function" ? next(value) : next;
+    if (store) {
+      store.ui.set(id2, v);
+      store.emit();
+    } else setLocal(v);
+  }];
+}
+function useSetting(name) {
+  const [value, setter, info] = useSetting$1(name), store = useContext(Context);
+  store == null ? void 0 : store.observeSetting(name, value);
+  return [value, (next) => {
+    var _a;
+    try {
+      const rebased = next === void 0 ? void 0 : rebaseSetting(value, next, ((_a = store == null ? void 0 : store.settings.get(name)) == null ? void 0 : _a.latest) ?? value);
+      if (name === "main.groupCatalog" && rebased !== void 0) validateGroups(rebased);
+      const ok = info.isEnabled && setter(rebased);
+      if (store) {
+        if (ok) {
+          store.settings.set(name, { raw: value, latest: rebased });
+          store.rejected = "";
+        } else store.rejected = "保存被拒绝，请检查输入或当前编辑权限。";
+        store.emit();
+      }
+      return ok;
+    } catch (e) {
+      if (store) {
+        store.rejected = String(e);
+        store.emit();
+      }
+      return false;
+    }
+  }, { ...info, reset: () => {
+    setter(void 0);
+  } }];
+}
+const noopSubscribe = () => () => {
+};
+const zero = () => 0;
+function SaveStatus() {
+  const store = useContext(Context);
+  useSyncExternalStore((store == null ? void 0 : store.subscribe) ?? noopSubscribe, (store == null ? void 0 : store.snapshot) ?? zero);
+  if (!store) return null;
+  const dirty = store.drafts.size;
+  const rejected = store.rejected || [...store.drafts.values()].some((d) => d.state === "rejected");
+  return /* @__PURE__ */ jsxs("div", { className: "aw-save", role: "status", children: [
+    /* @__PURE__ */ jsx("strong", { children: rejected ? "保存被拒绝" : dirty ? "尚有未保存输入" : "自动保存" }),
+    !!dirty && /* @__PURE__ */ jsxs("span", { children: [
+      dirty,
+      " 项输入未保存，关闭工作台后会丢失。"
+    ] }),
+    store.rejected && /* @__PURE__ */ jsx("span", { role: "alert", children: store.rejected }),
+    !!dirty && /* @__PURE__ */ jsxs("details", { children: [
+      /* @__PURE__ */ jsx("summary", { children: "查看未保存输入" }),
+      [...store.drafts].map(([key, d]) => /* @__PURE__ */ jsxs("div", { className: "aw-draft-row", children: [
+        /* @__PURE__ */ jsxs("span", { children: [
+          key.replace(/^workbench\//, ""),
+          " · ",
+          d.message || "待提交"
+        ] }),
+        /* @__PURE__ */ jsx("button", { type: "button", onClick: () => store.acceptCurrent(key), children: "放弃此项草稿" })
+      ] }, key))
+    ] })
+  ] });
+}
+function useDraft(value, save, validate = () => "", field = "value") {
+  const context = useContext(Context), scope = useContext(Scope);
+  const [local] = useState(() => new Session());
+  const store = context ?? local, key = scope + "/" + field;
+  useSyncExternalStore(store.subscribe, store.snapshot);
+  const timer = useRef();
+  const current = useMemo(() => ({ value, save, validate }), [store, key]);
+  Object.assign(current, { value, save, validate });
+  const commit = () => {
+    clearTimeout(timer.current);
+    return store.commit(key, current.value, current.validate, current.save);
+  };
+  useEffect(() => {
+    store.observe(key, value);
+  }, [store, key, value]);
+  useEffect(() => () => {
+    var _a;
+    clearTimeout(timer.current);
+    if (((_a = store.drafts.get(key)) == null ? void 0 : _a.state) === "pending") store.commit(key, current.value, current.validate, current.save);
+  }, [store, key, current]);
+  const draft = store.drafts.get(key);
+  return {
+    value: (draft == null ? void 0 : draft.value) ?? value,
+    draft,
+    commit,
+    edit: (next) => {
+      store.edit(key, next, current.value);
+      clearTimeout(timer.current);
+      timer.current = setTimeout(commit, 500);
+    },
+    useLatest: () => store.acceptCurrent(key),
+    keepDraft: () => {
+      store.keepDraft(key, current.value);
+      commit();
+    }
+  };
+}
+const Navigation = createContext(null);
+function EditorNavigation({ children }) {
+  var _a;
+  const [route, go] = useState({ area: "achievements", sub: "levels" });
+  const [history, setHistory] = useState([]), [selections, setSelections] = useState({});
+  const select = (key, id2) => setSelections((s) => ({ ...s, [key]: id2 }));
+  const locate = (target) => {
+    setHistory((h) => [...h, { route, selections }]);
+    setSelections((s) => ({ ...s, ...target.selections, ["mobile:" + target.route.area + "/" + target.route.sub]: "detail" }));
+    go(target.route);
+  };
+  return /* @__PURE__ */ jsx(Navigation.Provider, { value: {
+    route,
+    go,
+    selections,
+    select,
+    locate,
+    canBack: !!history.length,
+    backLabel: ((_a = history[history.length - 1]) == null ? void 0 : _a.route.sub) === "graph" ? "← 返回关联图" : "← 返回原编辑位置",
+    jump: (next, key, id2) => locate({ route: next, selections: { [key]: id2 } }),
+    back: () => {
+      const last = history[history.length - 1];
+      if (last) {
+        go(last.route);
+        setSelections(last.selections);
+        setHistory((h) => h.slice(0, -1));
+      }
+    }
+  }, children });
+}
+function useNavigation() {
+  return useContext(Navigation);
+}
+function useSelection(key, initial = "") {
+  const nav = useNavigation();
+  const [local, setLocal] = useState(initial);
+  return [(nav == null ? void 0 : nav.selections[key]) ?? local, (id2) => {
+    setLocal(id2);
+    nav == null ? void 0 : nav.select(key, id2);
+  }];
+}
+function RemovalContext({ children, title, label = "删除", detail, reason = "", onRemove, style }) {
+  const [anchor, setAnchor] = useState(null);
+  return /* @__PURE__ */ jsxs("div", { style, "data-removal-context": title, onContextMenu: (event) => {
+    if (!event.currentTarget.contains(event.target)) return;
+    event.stopPropagation();
+    const target = event.target;
+    if (target.closest('input, textarea, select, [contenteditable="true"], [role="textbox"], [role="listbox"], [role="menu"]')) return;
+    event.preventDefault();
+    setAnchor({ x: event.clientX, y: event.clientY });
+  }, children: [
+    children,
+    anchor && /* @__PURE__ */ jsx(
       Menu.Root,
       {
-        open: open && !!target && !!pointed,
+        open: true,
         onOpenChange: (e) => {
-          if (!e.open) setTarget(null);
+          if (!e.open) setAnchor(null);
         },
-        onEscapeKeyDown: returnToList,
         positioning: {
           strategy: "fixed",
-          placement: "right-start",
-          gutter: 4,
+          placement: "bottom-start",
           overflowPadding: 8,
-          flip: ["left-start", "bottom-end", "top-end"],
           slide: true,
           fitViewport: true,
-          hideWhenDetached: true,
-          getAnchorElement: () => (target == null ? void 0 : target.row) ?? null
+          getAnchorRect: () => ({ x: anchor.x, y: anchor.y, width: 0, height: 0 })
         },
         onSelect: (e) => {
-          if (e.value === "remove" && pointed && !removalReason(pointed.id)) onRemove(pointed.id);
-          setTarget(null);
-          returnToList();
+          if (e.value === "remove" && !reason) onRemove();
+          setAnchor(null);
         },
         children: /* @__PURE__ */ jsx(Portal, { children: /* @__PURE__ */ jsx(Menu.Positioner, { children: /* @__PURE__ */ jsxs(
           Menu.Content,
           {
-            ref: menuRef,
             "data-studio-user-content": true,
-            ...colors,
-            borderWidth: "1px",
-            borderStyle: "solid",
-            width: "320px",
+            bg: "var(--bg-canvas)",
+            color: "var(--fg-primary)",
+            border: "1px solid var(--border-default)",
+            width: "300px",
             maxW: "calc(100vw - 16px)",
             maxH: "var(--available-height)",
             overflowY: "auto",
             children: [
-              /* @__PURE__ */ jsxs("div", { style: { padding: "6px 10px", color: "var(--fg-secondary)" }, children: [
-                /* @__PURE__ */ jsx("div", { style: { overflowWrap: "anywhere" }, children: pointed == null ? void 0 : pointed.name }),
-                /* @__PURE__ */ jsx("div", { title: pointed == null ? void 0 : pointed.id, style: { fontSize: "0.85em", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }, children: pointed == null ? void 0 : pointed.id })
-              ] }),
+              /* @__PURE__ */ jsx("div", { style: { padding: "6px 10px", overflowWrap: "anywhere" }, children: title }),
               /* @__PURE__ */ jsx(
                 Menu.Item,
                 {
                   value: "remove",
                   disabled: !!reason,
-                  ...optionFrame,
+                  border: "1px solid var(--border-subtle, var(--border-default))",
+                  borderRadius: "4px",
                   color: "var(--fg-primary)",
-                  _highlighted: { bg: "var(--bg-subtle)", borderColor: "var(--border-default)" },
-                  children: shared ? "删除默认阶段" : "从此成就删除阶段"
+                  _highlighted: { bg: "var(--bg-subtle)" },
+                  children: label
                 }
               ),
-              /* @__PURE__ */ jsx("div", { style: { padding: "6px 10px", color: "var(--fg-secondary)", fontSize: "0.8em", lineHeight: 1.5 }, children: reason || (shared ? "影响沿用此默认阶段的成就；专用配置保留。" : "只影响当前成就，其他成就不变。") })
+              /* @__PURE__ */ jsx("div", { style: { padding: "6px 10px", color: "var(--fg-secondary)", fontSize: "0.8em", lineHeight: 1.5 }, children: reason || detail })
             ]
           }
         ) }) })
       }
     )
+  ] });
+}
+const Label = createContext("输入");
+function FieldRow({ label, description, disabled, children }) {
+  return /* @__PURE__ */ jsx(EditorScope, { id: label, children: /* @__PURE__ */ jsx(Label.Provider, { value: label, children: /* @__PURE__ */ jsxs("div", { className: "aw-field", "data-field": label, "aria-disabled": disabled || void 0, children: [
+    /* @__PURE__ */ jsxs("div", { className: "aw-label", children: [
+      label,
+      description && /* @__PURE__ */ jsx("p", { className: "aw-note", children: description })
+    ] }),
+    /* @__PURE__ */ jsx("fieldset", { "aria-label": label, disabled, children })
+  ] }) }) });
+}
+function Section({ title, description, children, actions }) {
+  return /* @__PURE__ */ jsx(EditorScope, { id: title, children: /* @__PURE__ */ jsxs("section", { className: "aw-section", children: [
+    /* @__PURE__ */ jsxs("header", { children: [
+      /* @__PURE__ */ jsx("h3", { children: title }),
+      actions
+    ] }),
+    description && /* @__PURE__ */ jsx("p", { className: "aw-note", children: description }),
+    children
+  ] }) });
+}
+function DraftFeedback({ draft, useLatest, keepDraft }) {
+  return draft ? /* @__PURE__ */ jsxs("div", { className: "aw-note", role: "status", children: [
+    draft.message || "待提交…",
+    draft.state === "conflict" && /* @__PURE__ */ jsxs("div", { className: "aw-actions", children: [
+      /* @__PURE__ */ jsx(Button, { onClick: useLatest, children: "使用最新值" }),
+      /* @__PURE__ */ jsx(Button, { onClick: keepDraft, children: "核对后保留草稿" })
+    ] })
+  ] }) : null;
+}
+function TextInput({ value, onChange, multiline, ariaLabel, required, validate, ...props }) {
+  const label = useContext(Label);
+  const d = useDraft(value ?? "", onChange, validate ?? ((v) => v.length > 1e3 ? "最多 1000 个字符。" : required && !v.trim() ? "请填写内容；草稿尚未提交。" : ""), ariaLabel ?? "value");
+  const common = { ...props, className: "aw-input", "aria-label": ariaLabel ?? label, value: d.value, onChange: (e) => d.edit(e.target.value), onBlur: d.commit };
+  return /* @__PURE__ */ jsxs(Fragment, { children: [
+    multiline ? /* @__PURE__ */ jsx("textarea", { ...common, rows: 4 }) : /* @__PURE__ */ jsx("input", { ...common, type: "text" }),
+    /* @__PURE__ */ jsx(DraftFeedback, { ...d })
+  ] });
+}
+function Numeric({ value, onChange, min = 0, max = 4096, step = 1, ariaLabel }) {
+  const label = useContext(Label);
+  const d = useDraft(String(value), (raw) => onChange(Number(raw)), (raw) => raw.trim() && Number.isFinite(Number(raw)) && Number(raw) >= min && Number(raw) <= max ? "" : `请输入 ${min}—${max} 之间的数值。`, ariaLabel ?? "number");
+  return /* @__PURE__ */ jsxs(Fragment, { children: [
+    /* @__PURE__ */ jsx("input", { className: "aw-input", "aria-label": ariaLabel ?? label, type: "number", min, max, step, value: d.value, onChange: (e) => d.edit(e.target.value), onBlur: d.commit }),
+    /* @__PURE__ */ jsx(DraftFeedback, { ...d })
+  ] });
+}
+function Tabs({ value, onChange, items, label = "工作区" }) {
+  return /* @__PURE__ */ jsx("nav", { className: "aw-tabs", "aria-label": label, children: items.map((item, index) => /* @__PURE__ */ jsx(
+    "button",
+    {
+      type: "button",
+      "aria-current": value === item.id ? "page" : void 0,
+      onClick: () => onChange(item.id),
+      onKeyDown: (e) => {
+        var _a, _b;
+        if (e.key === "ArrowRight" || e.key === "ArrowLeft") {
+          e.preventDefault();
+          const n = (index + (e.key === "ArrowRight" ? 1 : -1) + items.length) % items.length;
+          onChange(items[n].id);
+          (_b = (_a = e.currentTarget.parentElement) == null ? void 0 : _a.children[n]) == null ? void 0 : _b.focus();
+        }
+      },
+      children: item.name
+    },
+    item.id
+  )) });
+}
+function ObjectList({ items, selected, onSelect, title, actions, onRemove, removalReason, extra }) {
+  const [query, setQuery] = useEditorState("search:" + title, ""), [page, setPage] = useEditorState("page:" + title, 0);
+  const found = items.filter((i) => `${i.name} ${i.id}`.toLocaleLowerCase().includes(query.toLocaleLowerCase()));
+  const pages = Math.max(1, Math.ceil(found.length / 50)), shownPage = Math.min(page, pages - 1);
+  return /* @__PURE__ */ jsxs("aside", { className: "aw-object-list", children: [
+    /* @__PURE__ */ jsxs("h3", { children: [
+      title,
+      " ",
+      /* @__PURE__ */ jsx("small", { children: items.length })
+    ] }),
+    extra,
+    /* @__PURE__ */ jsx("input", { className: "aw-input", "aria-label": "搜索" + title, value: query, placeholder: "搜索名称或编号", onChange: (e) => {
+      setQuery(e.target.value);
+      setPage(0);
+    } }),
+    /* @__PURE__ */ jsx("div", { className: "aw-actions", children: actions }),
+    /* @__PURE__ */ jsxs("div", { className: "aw-list", "aria-label": title, children: [
+      found.slice(shownPage * 50, (shownPage + 1) * 50).map((i) => /* @__PURE__ */ jsx(RemovalContext, { title: `${i.name}（${i.id}）`, label: "删除", detail: "按当前对象的删除保护处理。", reason: onRemove ? removalReason == null ? void 0 : removalReason(i.id) : "此入口不可删除。", onRemove: () => onRemove == null ? void 0 : onRemove(i.id), children: /* @__PURE__ */ jsxs("button", { className: "aw-object", "aria-current": selected === i.id ? "true" : void 0, onClick: () => onSelect(i.id), children: [
+        /* @__PURE__ */ jsx("strong", { children: i.name || "未命名" }),
+        /* @__PURE__ */ jsx("small", { children: i.id })
+      ] }) }, i.id)),
+      !found.length && /* @__PURE__ */ jsx("p", { className: "aw-note", children: "没有匹配项；当前编辑对象保持不变。" })
+    ] }),
+    pages > 1 && /* @__PURE__ */ jsxs("div", { className: "aw-actions", children: [
+      /* @__PURE__ */ jsx(Button, { disabled: !shownPage, onClick: () => setPage(shownPage - 1), children: "上一页" }),
+      /* @__PURE__ */ jsxs("span", { children: [
+        shownPage + 1,
+        " / ",
+        pages
+      ] }),
+      /* @__PURE__ */ jsx(Button, { disabled: shownPage + 1 >= pages, onClick: () => setPage(shownPage + 1), children: "下一页" })
+    ] })
+  ] });
+}
+function Workspace({ list: list2, children, preview, selected = true }) {
+  const nav = useNavigation();
+  const [mobile, setMobile] = useSelection("mobile:" + (nav ? nav.route.area + "/" + nav.route.sub : "local"));
+  const detail = mobile === "detail", setDetail = (value) => setMobile(value ? "detail" : "list");
+  return /* @__PURE__ */ jsxs("div", { className: `aw-workspace ${detail ? "aw-show-detail" : ""} ${preview ? "aw-has-preview" : ""}`, children: [
+    /* @__PURE__ */ jsx("div", { className: "aw-list-column", onClick: (e) => {
+      const button = e.target.closest("button");
+      const text2 = (button == null ? void 0 : button.textContent) ?? "";
+      if (button && (button.matches(".aw-object") || text2 === "创建" || text2.includes("＋") && !text2.includes("新建成就"))) setDetail(true);
+    }, children: list2 }),
+    /* @__PURE__ */ jsxs("main", { className: "aw-editor", children: [
+      /* @__PURE__ */ jsx("div", { className: "aw-mobile", children: /* @__PURE__ */ jsx(Button, { onClick: () => setDetail(false), children: "← 返回列表" }) }),
+      selected ? children : /* @__PURE__ */ jsx("p", { children: "从左侧选择一个对象，或新建一个。" })
+    ] }),
+    preview && /* @__PURE__ */ jsx("aside", { className: "aw-preview", children: preview })
+  ] });
+}
+const labels = { level: "等级", card: "卡片方案", popup: "浮现方案" };
+function useGroups() {
+  const [saved, save] = useSetting("main.groupCatalog");
+  const [levels] = useSetting("main.levels");
+  const [appearances] = useSetting("main.appearances");
+  const rows2 = saved ?? [];
+  function choices2(field) {
+    return (field === "level" ? (levels == null ? void 0 : levels.length) ? levels : DEFAULT_LEVELS : (appearances ?? []).filter((p) => !p.surface || p.surface === field)).map((row) => ({ value: row.id, label: row.name }));
+  }
+  return { rows: rows2, save, groups: orderedGroups(rows2), choices: choices2 };
+}
+function addMember(rows2, group, achievement) {
+  var _a;
+  const members = membersOf(rows2, group);
+  if (members.some((row) => row.achievement === achievement)) return rows2;
+  return [...rows2, { id: "member:" + group + ":" + achievement, kind: "member", group, achievement, order: (((_a = members[members.length - 1]) == null ? void 0 : _a.order) ?? -1) + 1 }];
+}
+function reorder(rows2, sorted, id2, delta) {
+  const from = sorted.findIndex((row) => row.id === id2), to = from + delta;
+  if (from < 0 || to < 0 || to >= sorted.length) return rows2;
+  const order = [...sorted];
+  [order[from], order[to]] = [order[to], order[from]];
+  const rank = new Map(order.map((row, i) => [row.id, i]));
+  return rows2.map((row) => rank.has(row.id) ? { ...row, order: rank.get(row.id) } : row);
+}
+function useDetach(rows2, save, choices2) {
+  const [items] = useSetting("main.achievements");
+  const [pending, setPending] = useState();
+  const group = rows2.find((row) => row.kind === "group" && row.id === (pending == null ? void 0 : pending.group));
+  const detach = (g, achievement, clear) => {
+    const used = rows2.some((row) => row.kind === "binding" && (!achievement || row.achievement === achievement) && DEFAULT_FIELDS.some((field) => (!clear || clear === field) && row[sourceKey(field)] === g.id));
+    if (used || !achievement && !clear) setPending({ group: g.id, achievement, clear });
+    else save(detachGroup(rows2, g, { achievement, clear }));
+  };
+  const links = group && pending ? rows2.flatMap((row) => row.kind === "binding" && (!pending.achievement || row.achievement === pending.achievement) ? DEFAULT_FIELDS.filter((field) => (!pending.clear || field === pending.clear) && row[sourceKey(field)] === group.id).map((field) => {
+    var _a, _b;
+    const name = ((_a = items == null ? void 0 : items.find((item) => item.id === row.achievement)) == null ? void 0 : _a.name) ?? row.achievement;
+    const value = ((_b = choices2(field).find((option) => option.value === group[field])) == null ? void 0 : _b.label) ?? group[field];
+    return /* @__PURE__ */ jsxs("div", { children: [
+      name,
+      " · ",
+      labels[field],
+      " → ",
+      value
+    ] }, JSON.stringify([row.id, field]));
+  }) : []) : [];
+  const confirmation = group && pending && /* @__PURE__ */ jsxs("div", { role: "alert", children: [
+    /* @__PURE__ */ jsxs("p", { children: [
+      pending.clear ? "清空组默认值" : pending.achievement ? "移出成员" : "删除分组",
+      "「",
+      group.name,
+      "」？"
+    ] }),
+    !!links.length && /* @__PURE__ */ jsxs("details", { open: true, children: [
+      /* @__PURE__ */ jsx("summary", { children: "以下成就将保留当前值" }),
+      links
+    ] }),
+    /* @__PURE__ */ jsx(Button, { onClick: () => {
+      if (save(detachGroup(rows2, group, pending))) setPending(void 0);
+    }, children: "确认" }),
+    /* @__PURE__ */ jsx(Button, { onClick: () => setPending(void 0), children: "取消" })
+  ] });
+  return { detach, confirmation };
+}
+function GroupEditor() {
+  const { rows: rows2, groups, save, choices: choices2 } = useGroups();
+  const [items] = useSetting("main.achievements");
+  const [selected, select] = useSelection("group");
+  const [query, setQuery] = useState("");
+  const group = groups.find((g) => g.id === selected) ?? groups[0];
+  const { detach, confirmation } = useDetach(rows2, save, choices2);
+  const members = group ? membersOf(rows2, group.id) : [];
+  const patch = (change) => save(rows2.map((row) => row.id === group.id ? { ...row, ...change } : row));
+  const add = () => {
+    var _a;
+    const id2 = "group_" + crypto.randomUUID();
+    if (save([...rows2, { id: id2, kind: "group", name: "新分组", visible: true, order: (((_a = groups[groups.length - 1]) == null ? void 0 : _a.order) ?? -1) + 1 }])) select(id2);
+  };
+  const itemNames = new Map((items ?? []).map((a) => [a.id, a.name]));
+  return /* @__PURE__ */ jsx(Workspace, { selected: !!group, list: /* @__PURE__ */ jsx(
+    ObjectList,
+    {
+      title: "分组",
+      items: groups.map((g) => ({ id: g.id, name: g.name ?? g.id })),
+      selected: (group == null ? void 0 : group.id) ?? "",
+      onSelect: select,
+      actions: /* @__PURE__ */ jsx(Button, { onClick: add, children: "＋ 新建分组" })
+    }
+  ), children: group && /* @__PURE__ */ jsxs(EditorScope, { id: "group:" + group.id, children: [
+    /* @__PURE__ */ jsx("h2", { children: group.name }),
+    /* @__PURE__ */ jsx(FieldRow, { label: "组名", children: /* @__PURE__ */ jsx(TextInput, { required: true, value: group.name ?? "", onChange: (name) => patch({ name }) }) }),
+    /* @__PURE__ */ jsx(FieldRow, { label: "初始显示", children: /* @__PURE__ */ jsx(Switch, { checked: group.visible !== false, onChange: (visible) => patch({ visible }) }) }),
+    /* @__PURE__ */ jsxs("div", { className: "aw-actions", children: [
+      /* @__PURE__ */ jsx(Button, { disabled: groups[0] === group, onClick: () => save(reorder(rows2, groups, group.id, -1)), children: "分组上移" }),
+      /* @__PURE__ */ jsx(Button, { disabled: groups[groups.length - 1] === group, onClick: () => save(reorder(rows2, groups, group.id, 1)), children: "分组下移" })
+    ] }),
+    DEFAULT_FIELDS.map((field) => /* @__PURE__ */ jsx(FieldRow, { label: "默认" + labels[field], children: /* @__PURE__ */ jsx(
+      Select,
+      {
+        value: group[field] || "",
+        options: [{ value: "", label: "未指定" }, ...choices2(field)],
+        onChange: (value) => value ? patch({ [field]: value }) : detach(group, void 0, field)
+      }
+    ) }, field)),
+    /* @__PURE__ */ jsxs(Section, { title: "组内成员", children: [
+      members.map((row, i) => /* @__PURE__ */ jsxs("div", { className: "aw-actions", children: [
+        /* @__PURE__ */ jsx("span", { children: itemNames.get(row.achievement) ?? row.achievement }),
+        /* @__PURE__ */ jsx(Button, { disabled: !i, onClick: () => save(reorder(rows2, members, row.id, -1)), children: "上移" }),
+        /* @__PURE__ */ jsx(Button, { disabled: i + 1 === members.length, onClick: () => save(reorder(rows2, members, row.id, 1)), children: "下移" }),
+        /* @__PURE__ */ jsx(Button, { onClick: () => detach(group, row.achievement), children: "移出" })
+      ] }, row.id)),
+      /* @__PURE__ */ jsx("input", { "aria-label": "搜索可加入的成就", placeholder: "搜索名称或编号", value: query, onChange: (e) => setQuery(e.target.value) }),
+      /* @__PURE__ */ jsx(
+        Select,
+        {
+          value: "",
+          placeholder: "选择成就加入",
+          options: (items ?? []).filter((a) => !members.some((m) => m.achievement === a.id) && (a.name + " " + a.id).toLowerCase().includes(query.toLowerCase())).map((a) => ({ value: a.id, label: a.name })),
+          onChange: (id2) => save(addMember(rows2, group.id, id2))
+        }
+      )
+    ] }),
+    /* @__PURE__ */ jsx(Button, { onClick: () => detach(group), children: "删除分组…" }),
+    confirmation
+  ] }, group.id) });
+}
+function AchievementGroups({ item }) {
+  const { rows: rows2, groups, save, choices: choices2 } = useGroups();
+  const binding = bindingOf(rows2, item.id);
+  const { detach, confirmation } = useDetach(rows2, save, choices2);
+  const joined = groups.filter((group) => membersOf(rows2, group.id).some((row) => row.achievement === item.id));
+  if (!groups.length && !binding) return null;
+  return /* @__PURE__ */ jsxs(Section, { title: "所属分组", children: [
+    groups.map((group) => /* @__PURE__ */ jsxs("label", { children: [
+      /* @__PURE__ */ jsx(
+        "input",
+        {
+          type: "checkbox",
+          checked: joined.includes(group),
+          onChange: (e) => e.target.checked ? save(addMember(rows2, group.id, item.id)) : detach(group, item.id)
+        }
+      ),
+      group.name
+    ] }, group.id)),
+    DEFAULT_FIELDS.map((field) => {
+      const opts = choices2(field), key = sourceKey(field);
+      const value = (binding == null ? void 0 : binding[key]) ? "g:" + binding[key] : (binding == null ? void 0 : binding[field]) ? "v:" + binding[field] : "";
+      return /* @__PURE__ */ jsx(FieldRow, { label: labels[field] + "来源", children: /* @__PURE__ */ jsx(
+        Select,
+        {
+          value,
+          options: [
+            { value: "", label: field === "level" ? "使用基础等级" : "使用通用默认方案" },
+            ...joined.filter((g) => g[field]).map((g) => {
+              var _a;
+              return { value: "g:" + g.id, label: "沿用「" + g.name + "」 · " + (((_a = opts.find((v) => v.value === g[field])) == null ? void 0 : _a.label) ?? g[field]) };
+            }),
+            ...opts.map((v) => ({ value: "v:" + v.value, label: "指定 · " + v.label }))
+          ],
+          onChange: (v) => save(updateBinding(rows2, item.id, { [key]: v.startsWith("g:") ? v.slice(2) : "", [field]: v.startsWith("v:") ? v.slice(2) : "" }))
+        }
+      ) }, field);
+    }),
+    confirmation
+  ] });
+}
+function GroupSourceSummary({ achievement }) {
+  const { rows: rows2, groups } = useGroups();
+  const nav = useNavigation(), binding = bindingOf(rows2, achievement);
+  if (!binding) return null;
+  return /* @__PURE__ */ jsx("div", { className: "aw-actions", children: DEFAULT_FIELDS.map((field) => {
+    const group = groups.find((g) => g.id === binding[sourceKey(field)]);
+    return group && /* @__PURE__ */ jsxs(Button, { onClick: () => nav == null ? void 0 : nav.jump({ area: "attributes", sub: "groups" }, "group", group.id), children: [
+      labels[field],
+      " · ",
+      group.name
+    ] }, field);
+  }) });
+}
+function TierEditor({ achievement, stages }) {
+  const [saved, save] = useSetting("main.stageTiers");
+  const rows2 = saved ?? [];
+  const own = resolveTiers(achievement, rows2.filter((row) => row.achievementId === achievement), stages);
+  const other = rows2.filter((row) => row.achievementId !== achievement);
+  return /* @__PURE__ */ jsxs(Section, { title: "阶段层级", collapsible: true, defaultOpen: false, children: [
+    /* @__PURE__ */ jsx(FieldRow, { label: "按层级获得", children: /* @__PURE__ */ jsx(Switch, { checked: !!own.length, onChange: (enable) => save(enable ? [...other, ...stages.map((s, i) => ({ achievementId: achievement, stageId: s.id, tier: i + 1 }))] : other) }) }),
+    !!own.length && /* @__PURE__ */ jsxs(Fragment, { children: [
+      /* @__PURE__ */ jsx("p", { children: "新阶段自动追加到最高层。同层先到者保留，更高层可直接获得。" }),
+      /* @__PURE__ */ jsx("ol", { "aria-label": "当前阶段层序", children: Array.from(new Set(own.map((row) => row.tier))).sort((a, b) => a - b).map((tier) => {
+        const names = own.filter((row) => row.tier === tier).map((row) => {
+          var _a;
+          return (_a = stages.find((stage) => stage.id === row.stageId)) == null ? void 0 : _a.name;
+        }).filter(Boolean);
+        return names.length > 0 && /* @__PURE__ */ jsxs("li", { children: [
+          "第 ",
+          tier,
+          " 层 · ",
+          names.join(" ／ ")
+        ] }, tier);
+      }) }),
+      stages.map((stage) => /* @__PURE__ */ jsx(EditorScope, { id: stage.id, children: /* @__PURE__ */ jsx(FieldRow, { label: stage.name, children: /* @__PURE__ */ jsx(
+        TextInput,
+        {
+          value: String(own.find((row) => row.stageId === stage.id).tier),
+          validate: (v) => /^[1-9]\d{0,4}$/.test(v) && Number(v) <= MAX_TIER ? "" : `请输入 1 至 ${MAX_TIER} 之间的整数。`,
+          onChange: (v) => save([...other, ...own.map((row) => row.stageId === stage.id ? { ...row, tier: Number(v) } : row)])
+        }
+      ) }) }, stage.id))
+    ] })
+  ] });
+}
+const workbenchStyle = `
+.aw-root{container-type:inline-size;color:var(--fg-primary);font:inherit;min-width:0;line-height:1.55}
+.aw-root *{box-sizing:border-box}.aw-root button,.aw-root input,.aw-root textarea{font:inherit}
+.aw-root button{cursor:pointer}.aw-root button:disabled{cursor:not-allowed;opacity:.5}
+.aw-root :focus-visible{outline:2px solid var(--accent,#c44840);outline-offset:3px}
+.aw-root h2,.aw-root h3,.aw-root p{margin:0 0 10px}.aw-root h2{font-size:1.2em}.aw-root h3{font-size:1em}
+.aw-top{position:sticky;top:0;z-index:5;background:var(--bg-canvas);border-bottom:1px solid var(--border-default);padding:12px 0}
+.aw-tabs{display:flex;gap:6px;flex-wrap:wrap;margin:8px 0 16px}.aw-tabs button{border:1px solid var(--border-default);border-radius:7px;padding:8px 15px;background:var(--bg-subtle);color:var(--fg-primary)}
+.aw-tabs button[aria-current]{border-color:var(--accent,#c44840);box-shadow:inset 0 -3px var(--accent,#c44840)}
+.aw-stage-picker{margin:8px 0 16px}.aw-stage-picker>.aw-input{margin-bottom:8px}
+.aw-stage-strip{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;align-items:start}
+.aw-stage-blocks{min-width:0;margin:0;padding:4px}.aw-stage-blocks>div{flex:0 0 auto;max-width:100%;min-width:0}
+.aw-stage-blocks button{display:block;max-width:100%;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.aw-stage-strip[data-collapsed="true"] .aw-stage-blocks{flex-wrap:nowrap;overflow:hidden}
+.aw-stage-toggle{margin-top:4px;padding:8px 10px;border:1px solid var(--border-default);border-radius:7px;background:var(--bg-subtle);color:var(--fg-primary);white-space:nowrap}
+.aw-scale-controls{display:flex;align-items:center;justify-content:flex-end;gap:8px;flex-wrap:wrap;margin-bottom:8px;color:var(--fg-secondary);font:inherit;font-size:.85em}
+.aw-scale-controls input{width:110px;accent-color:var(--accent,#c44840)}.aw-scale-controls button{border:1px solid var(--border-default);border-radius:6px;background:var(--bg-subtle);color:var(--fg-primary);padding:4px 8px;cursor:pointer}
+.aw-scale-controls button:disabled{opacity:.5;cursor:not-allowed}.aw-scale-controls output{min-width:3.5em;text-align:center}
+.aw-save{display:flex;gap:8px;flex-wrap:wrap;font-size:.82em;color:var(--fg-secondary)}
+.aw-workspace{display:grid;grid-template-columns:210px minmax(0,1fr);gap:18px;align-items:start}.aw-has-preview{grid-template-columns:210px minmax(0,1fr) 230px}.aw-stage-grid{display:grid;grid-template-columns:minmax(0,1fr) 210px;gap:14px;align-items:start}.aw-stage-grid>div{min-width:0}
+.aw-list-column,.aw-editor,.aw-preview{min-width:0}.aw-object-list{padding:10px;border:1px solid var(--border-subtle);border-radius:9px;background:var(--bg-subtle)}
+.aw-object-list h3{display:flex;justify-content:space-between}.aw-list{display:grid;gap:5px}.aw-object{display:block;text-align:left;width:100%;padding:10px;border:1px solid var(--border-subtle);border-radius:6px;color:var(--fg-primary);background:var(--bg-canvas)}
+.aw-object strong,.aw-object small{display:block;overflow-wrap:anywhere}.aw-object small{font-size:.75em;color:var(--fg-secondary)}.aw-object[aria-current]{border-color:var(--accent,#c44840);background:var(--bg-selected,var(--bg-muted))}
+.aw-actions{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:12px 0}.aw-note{color:var(--fg-secondary);font-size:.85em;overflow-wrap:anywhere}.aw-section{margin-bottom:18px;padding:14px;border:1px solid var(--border-subtle);border-radius:8px}.aw-section>.aw-section{border:0;padding:0}.aw-section>header{display:flex;justify-content:space-between;gap:10px}
+.aw-field{display:grid;grid-template-columns:minmax(100px,30%) minmax(0,1fr);gap:14px;align-items:start;padding:12px 0;border-bottom:1px solid var(--border-subtle)}.aw-field:last-child{border-bottom:0}.aw-label{font-weight:600}.aw-label p{font-weight:400}.aw-field fieldset{border:0;padding:0;margin:0;min-width:0}
+.aw-input{display:block;width:100%;min-width:0;padding:9px 12px;border:1px solid var(--border-default);border-radius:6px;color:var(--fg-primary);background:var(--bg-canvas)}textarea.aw-input{resize:vertical}.aw-preview{border:1px solid var(--border-subtle);padding:14px;border-radius:9px;overflow-wrap:anywhere}.aw-preview img{max-width:100%;max-height:100px;object-fit:contain}.aw-preview-card{padding:16px;border:1px dashed var(--border-default);border-radius:8px}.aw-mobile{display:none}.aw-scope{padding:10px;border-left:3px solid var(--accent,#c44840);background:var(--bg-subtle);margin:10px 0}.aw-css-grid{display:grid;grid-template-columns:145px minmax(0,1fr);gap:12px}.aw-css-code{min-height:220px;font-family:monospace!important}.aw-root pre{white-space:pre-wrap;overflow-wrap:anywhere}.aw-drag{cursor:grab!important;border:1px solid var(--border-default);background:var(--bg-subtle);color:var(--fg-primary);padding:6px;border-radius:4px}
+@container (max-width:999px){.aw-has-preview{grid-template-columns:190px minmax(0,1fr)}.aw-preview{grid-column:2}.aw-stage-grid{display:block}.aw-stage-grid .aw-preview{margin-top:14px}.aw-field{grid-template-columns:1fr;gap:5px}}
+@container (max-width:699px){.aw-workspace,.aw-has-preview{display:block}.aw-workspace .aw-editor,.aw-workspace .aw-preview{display:none}.aw-show-detail .aw-list-column{display:none}.aw-show-detail .aw-editor,.aw-show-detail .aw-preview{display:block}.aw-mobile{display:block;margin-bottom:12px}.aw-preview{margin-top:14px}.aw-css-grid{grid-template-columns:1fr}.aw-top{position:static}.aw-tabs button{padding:7px 10px}}
+`;
+function useChoiceParam(name) {
+  const [value, setValue, info] = useParam(name);
+  const session = useSession();
+  const [error, setError] = useState("");
+  useEffect(() => setError(""), [value, info.rawValue, info.isVariable]);
+  const choose = (next) => {
+    const ok = setValue(info.isInvalid && next === value ? void 0 : next);
+    if (session) {
+      session.rejected = ok ? "" : "参数保存被拒绝。";
+      session.emit();
+    }
+    setError(ok ? "" : "参数保存失败，原参数未修改。请检查输入或当前编辑权限后重试。");
+  };
+  return { value, choose, info, error };
+}
+function ParamFeedback({ info, error }) {
+  return /* @__PURE__ */ jsxs(Fragment, { children: [
+    info.isInvalid && /* @__PURE__ */ jsxs("p", { role: "alert", style: { overflowWrap: "anywhere", whiteSpace: "pre-wrap" }, children: [
+      "原参数无效，尚未修改。",
+      info.reason || "存储内容不符合参数要求。",
+      /* @__PURE__ */ jsx("br", {}),
+      "原值：",
+      JSON.stringify(info.rawValue) ?? String(info.rawValue)
+    ] }),
+    error && /* @__PURE__ */ jsx("p", { role: "alert", children: error })
+  ] });
+}
+function useStages(id2) {
+  const [items] = useSetting$1("main.achievements");
+  const [saved] = useSetting$1("main.displayStages");
+  const [defaults] = useSetting$1("main.defaultStages");
+  if (!id2 || !(items == null ? void 0 : items.some((item) => item.id === id2))) return [];
+  return resolveStages(id2, defaults, saved);
+}
+function AchievementChoice() {
+  const [items] = useSetting$1("main.achievements");
+  const { value: id2, choose, info, error } = useChoiceParam("achievementId");
+  const { readOnly, canUseVariables } = useInspectorEnvironment();
+  const [manual, setManual] = useState(false);
+  return /* @__PURE__ */ jsxs(Fragment, { children: [
+    /* @__PURE__ */ jsx(FieldRow, { label: "选择成就", description: !(items == null ? void 0 : items.length) ? "先在局内成就系统配置页添加成就。" : void 0, children: /* @__PURE__ */ jsx(
+      Select,
+      {
+        value: info.isInvalid ? "\0" : info.isVariable ? "" : id2 ?? "",
+        placeholder: "原参数无效，请重新选择",
+        disabled: readOnly,
+        onChange: choose,
+        options: [{ value: "", label: info.isVariable ? "当前使用变量" : "请选择成就", disabled: true }, ...id2 && !(items == null ? void 0 : items.some((a) => a.id === id2)) ? [{ value: id2, label: `未找到：${id2}` }] : [], ...(items ?? []).map((a) => ({ value: a.id, label: `${a.name || "未命名"}（${a.id}）` }))]
+      }
+    ) }),
+    /* @__PURE__ */ jsx(ParamFeedback, { info, error }),
+    /* @__PURE__ */ jsx(Button, { variant: "ghost", onClick: () => setManual(!manual), children: manual ? canUseVariables ? "收起编号／变量输入" : "收起编号输入" : canUseVariables ? "按编号或变量指定" : "按编号指定" }),
+    (manual || info.isVariable) && /* @__PURE__ */ jsx(ParamField, { name: "achievementId" })
+  ] });
+}
+function StageChoice({ name, optional = false }) {
+  const [achievementId, , achievementInfo] = useParam("achievementId");
+  const { value, choose, info, error } = useChoiceParam(name);
+  const { readOnly, canUseVariables } = useInspectorEnvironment();
+  const [manual, setManual] = useState(false);
+  const stages = useStages(achievementInfo.isInvalid ? void 0 : achievementId);
+  if (achievementInfo.isVariable || achievementInfo.isInvalid || !achievementId || info.isVariable || manual) return /* @__PURE__ */ jsxs(Fragment, { children: [
+    /* @__PURE__ */ jsx(ParamField, { name }),
+    /* @__PURE__ */ jsx(ParamFeedback, { info, error }),
+    manual && /* @__PURE__ */ jsx(Button, { variant: "ghost", onClick: () => setManual(false), children: "返回阶段选择" })
+  ] });
+  const missing = !!value && !stages.some((stage) => stage.id === value);
+  return /* @__PURE__ */ jsxs(Fragment, { children: [
+    /* @__PURE__ */ jsx(
+      FieldRow,
+      {
+        label: optional ? "仅在此阶段执行" : "目标展示阶段",
+        description: !stages.length ? "请先选择配置中存在的成就。" : missing ? `原阶段编号 ${value} 不属于此成就或已被移除，请重新选择。原参数尚未修改。` : optional ? "当前阶段不匹配时跳过操作。" : void 0,
+        children: /* @__PURE__ */ jsx(Select, { value: info.isInvalid ? "\0" : value ?? "", placeholder: info.isInvalid ? "原参数无效，请重新选择" : "请选择有效阶段", disabled: readOnly || !stages.length, onChange: choose, options: [
+          { value: "", label: optional ? "不限制" : "请选择阶段", disabled: !optional },
+          ...stages.map((s) => ({ value: s.id, label: `${s.name}（${s.id}）` }))
+        ] })
+      }
+    ),
+    /* @__PURE__ */ jsx(ParamFeedback, { info, error }),
+    /* @__PURE__ */ jsx(Button, { variant: "ghost", onClick: () => setManual(true), children: canUseVariables ? "按阶段编号或变量指定" : "按阶段编号指定" })
+  ] });
+}
+function OperationFields() {
+  const [expected, , expectedInfo] = useParam("expectedStageId");
+  const [advanced, setAdvanced] = useState(false);
+  return /* @__PURE__ */ jsxs(Fragment, { children: [
+    /* @__PURE__ */ jsx(AchievementChoice, {}),
+    /* @__PURE__ */ jsx(StageChoice, { name: "stageId" }),
+    /* @__PURE__ */ jsx(ParamField, { name: "notify" }),
+    /* @__PURE__ */ jsx(Button, { variant: "ghost", onClick: () => setAdvanced(!advanced), children: advanced ? "收起阶段限制" : "设置执行前的阶段限制（可选）" }),
+    (advanced || expected || expectedInfo.isVariable || expectedInfo.isInvalid) && /* @__PURE__ */ jsx(StageChoice, { name: "expectedStageId", optional: true })
+  ] });
+}
+function GroupVisibilityInspector() {
+  return /* @__PURE__ */ jsx(InspectorFrame, { children: /* @__PURE__ */ jsx(GroupVisibilityFields, {}) });
+}
+function GroupVisibilityFields() {
+  const [rows2] = useSetting$1("main.groupCatalog");
+  const { value, choose, info, error } = useChoiceParam("groupId");
+  const { readOnly } = useInspectorEnvironment();
+  return /* @__PURE__ */ jsxs(Fragment, { children: [
+    /* @__PURE__ */ jsx(FieldRow, { label: "分组", children: /* @__PURE__ */ jsx(Select, { value: value ?? "", disabled: readOnly, options: (rows2 ?? []).filter((r) => r.kind === "group").map((r) => ({ value: r.id, label: r.name || r.id })), placeholder: "选择分组", onChange: choose }) }),
+    /* @__PURE__ */ jsx(ParamFeedback, { info, error }),
+    /* @__PURE__ */ jsxs("details", { children: [
+      /* @__PURE__ */ jsx("summary", { children: "使用编号或变量" }),
+      /* @__PURE__ */ jsx(ParamField, { name: "groupId" })
+    ] }),
+    /* @__PURE__ */ jsx(ParamField, { name: "visible" })
+  ] });
+}
+function ReadFields() {
+  return /* @__PURE__ */ jsxs(Fragment, { children: [
+    /* @__PURE__ */ jsx(AchievementChoice, {}),
+    /* @__PURE__ */ jsx(ParamField, { name: "field" }),
+    /* @__PURE__ */ jsx("p", { children: "返回所选信息的文本值。" })
+  ] });
+}
+function InspectorFrame({ children }) {
+  return /* @__PURE__ */ jsx(EditorSession, { children: /* @__PURE__ */ jsxs("div", { className: "aw-root", children: [
+    /* @__PURE__ */ jsx("style", { children: workbenchStyle }),
+    children,
+    /* @__PURE__ */ jsx(SaveStatus, {})
+  ] }) });
+}
+function OperationInspector() {
+  return /* @__PURE__ */ jsx(InspectorFrame, { children: /* @__PURE__ */ jsx(OperationFields, {}) });
+}
+function ReadInspector() {
+  return /* @__PURE__ */ jsx(InspectorFrame, { children: /* @__PURE__ */ jsx(ReadFields, {}) });
+}
+function NotificationModeFields() {
+  const { value, choose, info, error } = useChoiceParam("action");
+  const { readOnly, canUseVariables } = useInspectorEnvironment();
+  const [manual, setManual] = useState(false);
+  const options2 = [{ value: "read", label: "读取当前方式" }, { value: "toggle", label: "切换到另一种方式" }, { value: "sequential", label: "使用连续浮现" }, { value: "merged", label: "使用合并浮现" }, { value: "default", label: "恢复创作者默认方式" }];
+  return /* @__PURE__ */ jsxs(Fragment, { children: [
+    /* @__PURE__ */ jsx(FieldRow, { label: "浮现方式操作", children: /* @__PURE__ */ jsx(Select, { value: info.isVariable || info.isInvalid ? "" : value ?? "", disabled: readOnly, placeholder: "请选择操作", options: options2, onChange: choose }) }),
+    /* @__PURE__ */ jsx(ParamFeedback, { info, error }),
+    /* @__PURE__ */ jsx("p", { className: "aw-note", children: "返回当前方式编号；切换需在播放规则中允许玩家切换。" }),
+    /* @__PURE__ */ jsx(Button, { onClick: () => setManual(!manual), children: canUseVariables ? "编号／变量输入" : "编号输入" }),
+    (manual || info.isVariable) && /* @__PURE__ */ jsx(ParamField, { name: "action" })
+  ] });
+}
+function NotificationModeInspector() {
+  return /* @__PURE__ */ jsx(InspectorFrame, { children: /* @__PURE__ */ jsx(NotificationModeFields, {}) });
+}
+function OpenPageInspector() {
+  return /* @__PURE__ */ jsx("p", { children: "准备成就数据并打开所配置的成就页，接入创作者允许的浏览方式。此方法无须参数。" });
+}
+function RefreshInspector() {
+  return /* @__PURE__ */ jsx("p", { children: "重新生成界面数据。阶段切换和常规配置变化通常自动刷新；此方法供需要主动同步的场合使用。" });
+}
+const settings = {
+  page: { label: "成就页界面", kind: "ui" },
+  popup: { label: "默认浮现界面", kind: "ui" },
+  summaryUI: { label: "合并汇总界面", kind: "ui" },
+  notifications: { label: "允许播放浮现", kind: "boolean" },
+  allowPlayerSwitch: { label: "允许玩家切换浏览方式", kind: "boolean" },
+  allowNotificationModeSwitch: { label: "允许玩家切换浮现方式", kind: "boolean" },
+  scrollDirection: { label: "滚动方向", kind: "enum", options: [{ value: "vertical", label: "纵向滚动" }, { value: "horizontal", label: "横向滚动" }] },
+  notificationMode: { label: "默认浮现方式", kind: "enum", options: [{ value: "sequential", label: "连续浮现" }, { value: "merged", label: "合并浮现" }] },
+  durationMs: { label: "默认停留时长（毫秒）", kind: "number", min: 300, max: 6e4 },
+  summaryDurationMs: { label: "汇总停留时长（毫秒）", kind: "number", min: 300, max: 6e4 },
+  notificationWindowMs: { label: "批次收集窗口（毫秒）", kind: "number", min: 50, max: 5e3 }
+};
+function SettingField({ name }) {
+  const [value, setValue, info] = useSetting(name), definition = settings[name.replace(/^main\./, "")];
+  if (!definition) return /* @__PURE__ */ jsxs("p", { role: "alert", children: [
+    "未映射配置：",
+    name
+  ] });
+  return /* @__PURE__ */ jsxs(FieldRow, { label: definition.label, disabled: !info.isEnabled, children: [
+    definition.kind === "ui" ? /* @__PURE__ */ jsx(UIRefPicker, { value: String(value ?? "").replace(/^ui:@?/, ""), onChange: (v) => setValue(v ? "ui:@" + (v.includes("/") ? v : "mixing-entropy.achievement/" + v) : "") }) : definition.kind === "boolean" ? /* @__PURE__ */ jsx(Switch, { checked: value === true, onChange: setValue }) : definition.kind === "enum" ? /* @__PURE__ */ jsx(Select, { value: String(value), options: definition.options, onChange: setValue }) : /* @__PURE__ */ jsx(Numeric, { value: Number(value), min: definition.min, max: definition.max, onChange: setValue }),
+    info.isModified && /* @__PURE__ */ jsx(Button, { variant: "ghost", onClick: () => setValue(void 0), children: "恢复此项默认" })
+  ] });
+}
+function WorkbenchScale({ children }) {
+  const [scale, setScale] = useEditorState("workbench-scale", 100);
+  const change = (value) => setScale(Math.min(150, Math.max(75, value)));
+  return /* @__PURE__ */ jsxs(Fragment, { children: [
+    /* @__PURE__ */ jsxs("div", { className: "aw-scale-controls", role: "group", "aria-label": "工作台缩放", children: [
+      /* @__PURE__ */ jsx("span", { children: "工作台缩放" }),
+      /* @__PURE__ */ jsx("button", { type: "button", "aria-label": "缩小工作台", disabled: scale <= 75, onClick: () => change(scale - 5), children: "−" }),
+      /* @__PURE__ */ jsx("input", { type: "range", "aria-label": "工作台缩放比例", min: 75, max: 150, step: 5, value: scale, onChange: (e) => change(Number(e.target.value)) }),
+      /* @__PURE__ */ jsx("button", { type: "button", "aria-label": "放大工作台", disabled: scale >= 150, onClick: () => change(scale + 5), children: "＋" }),
+      /* @__PURE__ */ jsxs("output", { children: [
+        scale,
+        "%"
+      ] }),
+      /* @__PURE__ */ jsx("button", { type: "button", disabled: scale === 100, onClick: () => setScale(100), children: "还原" })
+    ] }),
+    /* @__PURE__ */ jsx("div", { "data-workbench-scale": scale, style: { zoom: scale / 100 }, children })
+  ] });
+}
+const relationId = (...parts) => JSON.stringify(parts);
+const normalizeUI = (value) => {
+  const v = value.replace(/^ui:/, "").replace(/^@/, "");
+  return v.includes("/") ? v : "mixing-entropy.achievement/" + v;
+};
+const interfaceName = (ref) => ({ "mixing-entropy.achievement/achievements": "成就页", "mixing-entropy.achievement/achievement-popup": "成就浮现", "mixing-entropy.achievement/achievement-summary": "成就汇总浮现" })[normalizeUI(ref)] ?? normalizeUI(ref).split("/").pop();
+const stageTarget = (achievementId, stageId, surface = "content") => ({ route: { area: "achievements", sub: "" }, selections: { achievement: achievementId, ["detail:" + achievementId]: "stages", ["stage:" + achievementId]: stageId, ["surface:" + achievementId + ":" + stageId]: surface } });
+const sharedTarget = (kind, id2, surface = "content") => ({ route: { area: "attributes", sub: kind === "level" ? "levels" : "defaults" }, selections: { [kind]: id2, ...kind === "default-stage" ? { ["surface::" + id2]: surface } : {} } });
+const schemeTarget = (id2, surface) => ({ route: { area: "interfaces", sub: surface === "card" ? "cards" : "popups" }, selections: { ["appearance:" + surface]: id2 } });
+const interfaceTarget = (ref, template = false) => ({ route: { area: "interfaces", sub: "reference" }, selections: { "interface-ref": normalizeUI(ref), "interface-template": template ? "yes" : "" } });
+function stageLinks(input2, item, stage) {
+  const c = input2.catalog, own = c.stages.some((s) => s.achievementId === item.id && s.id === stage.id && !s.disabled);
+  const shared = c.defaultStages.find((s) => s.id === stage.id);
+  const level = c.levels.find((l) => l.id === (stage.levelMode === "custom" ? stage.levelId : item.levelId));
+  const surfaces = ["card", "popup"].map((surface) => {
+    var _a, _b;
+    const p = applyGroupScheme(resolvePresentation(c.presentations ?? [], c.defaultStages, stage, item.id, surface), c.groups ?? [], item.id);
+    const scheme = presentationPreset(p, c.appearances ?? [], levelPresetId(level, surface), surface);
+    const material = materializePresentation(p, c.appearances ?? [], levelPresetId(level, surface));
+    const ownP = (_a = c.presentations) == null ? void 0 : _a.find((r) => r.achievementId === item.id && r.stageId === stage.id && r.surface === surface);
+    const sharedP = (_b = c.presentations) == null ? void 0 : _b.find((r) => !r.achievementId && r.stageId === stage.id && r.surface === surface && r.mode === "custom");
+    const css = (c.elementCss ?? []).filter((r) => r.ownerId === stage.id && (r.surface === surface || r.surface === "both"));
+    const sharedCss = css.some((r) => r.ownerKind === "defaultStage");
+    const localCss = css.filter((r) => r.ownerKind === "stage" && r.achievementId === item.id);
+    const sharedUsed = !!shared && ((ownP == null ? void 0 : ownP.mode) !== "custom" && (!!sharedP || (ownP == null ? void 0 : ownP.mode) === "inherit" || !own) || sharedCss);
+    const inherited = !!shared && (ownP == null ? void 0 : ownP.mode) !== "custom" && !localCss.length && ((ownP == null ? void 0 : ownP.mode) === "inherit" || !!sharedP || !own);
+    return { surface, p, scheme, ownP, sharedUsed, localCss, inherited, ui: normalizeUI(surface === "card" ? input2.page : material.ui || input2.popup) };
+  });
+  return { own, shared, level, surfaces };
+}
+function relationStageStructure(input2, item, stage) {
+  const links = stageLinks(input2, item, stage);
+  return { ...links, fullyInherited: !!links.shared && !links.own && links.surfaces.every((p) => p.inherited) };
+}
+function referencedIds(input2, item, stage) {
+  const s = stageLinks(input2, item, stage), result2 = [];
+  if (s.shared && (!s.own || s.surfaces.some((p) => p.sharedUsed))) result2.push(relationId("default", stage.id));
+  if (s.level) {
+    result2.push(relationId("level", s.level.id));
+    for (const surface of ["card", "popup"]) {
+      const id2 = levelPresetId(s.level, surface);
+      if (id2) result2.push(relationId("scheme", id2, surface));
+    }
+  }
+  for (const p of s.surfaces) {
+    if (p.scheme) result2.push(relationId("scheme", p.scheme.id, p.surface));
+    result2.push(relationId("interface", p.ui));
+    if (p.surface === "card") result2.push(relationId("template", p.ui));
+  }
+  return result2;
+}
+function relationReferrers(input2, nodeId) {
+  const result2 = [];
+  for (const item of input2.catalog.achievements) for (const stage of resolveStages(item.id, input2.catalog.defaultStages, input2.catalog.stages))
+    if (referencedIds(input2, item, stage).includes(nodeId)) result2.push({ achievementId: item.id, stageId: stage.id, name: item.name, stageName: stage.name });
+  return result2;
+}
+function radialLayout(nodes, edges, root2) {
+  const tau = Math.PI * 2, wrap = (a) => (a % tau + tau) % tau;
+  const stages = nodes.filter((n) => n.kind === "stage"), angles = /* @__PURE__ */ new Map([[root2, 0]]);
+  const center = nodes.find((n) => n.id === root2);
+  center.x = 0;
+  center.y = 0;
+  stages.forEach((n, i) => angles.set(n.id, wrap(-Math.PI / 2 + i * tau / Math.max(1, stages.length))));
+  const ring = (n) => n.id === root2 ? 0 : n.depth ?? (n.kind === "stage" ? 1 : 4);
+  const stageRadius = Math.max(210, stages.length * 175 / tau);
+  for (let depth = 1; depth <= Math.max(1, ...nodes.map(ring)); depth++) {
+    const group = nodes.filter((n) => ring(n) === depth), radius = Math.max(stageRadius + (depth - 1) * 170, group.length * 180 / tau);
+    group.forEach((n, i) => {
+      if (angles.has(n.id)) return;
+      const sources = edges.filter((e) => e.to === n.id && angles.has(e.from)).map((e) => angles.get(e.from));
+      const stage = stages.find((s) => s.stageId === n.stageId);
+      if (stage) sources.push(angles.get(stage.id));
+      const x2 = sources.reduce((v, a) => v + Math.cos(a), 0), y = sources.reduce((v, a) => v + Math.sin(a), 0);
+      let angle = sources.length && Math.hypot(x2, y) > 0.01 ? Math.atan2(y, x2) : -Math.PI / 2 + i * tau / Math.max(1, group.length);
+      if (n.kind === "card") angle -= 0.22;
+      if (n.kind === "popup") angle += 0.22;
+      angles.set(n.id, wrap(angle));
+    });
+    if (depth > 1) for (let iteration = 0; iteration < 80; iteration++) for (let i = 0; i < group.length; i++) for (let j = i + 1; j < group.length; j++) {
+      const a = group[i].id, b = group[j].id, d = (angles.get(b) - angles.get(a) + Math.PI + tau) % tau - Math.PI, min = Math.min(175 / radius, tau / Math.max(1, group.length) * 0.85);
+      if (Math.abs(d) >= min) continue;
+      const push = (min - Math.abs(d)) * 0.26 * (Math.sign(d) || 1);
+      angles.set(a, wrap(angles.get(a) - push));
+      angles.set(b, wrap(angles.get(b) + push));
+    }
+    for (const n of group) {
+      const a = angles.get(n.id);
+      n.x = Math.cos(a) * radius * 1.2;
+      n.y = Math.sin(a) * radius;
+    }
+  }
+}
+function buildRelations(input2, focusId, expanded = [], page = 0, references = [], referenceNode = "") {
+  const c = input2.catalog, item = c.achievements.find((a) => a.id === focusId), nodes = /* @__PURE__ */ new Map(), edges = [];
+  if (!item) return { nodes: [], edges };
+  const add = (n) => {
+    const existing = nodes.get(n.id);
+    if (!existing) nodes.set(n.id, n);
+    else existing.depth = Math.min(existing.depth ?? 99, n.depth ?? 99);
+    return n.id;
+  };
+  const edge = (from, to, type, label) => {
+    if (!edges.some((e) => e.from === from && e.to === to && e.label === label)) edges.push({ from, to, type, label });
+  };
+  const all = resolveStages(item.id, c.defaultStages, c.stages), shown = all.slice(page * 50, page * 50 + 50);
+  const aid = add({ id: relationId("achievement", item.id), kind: "achievement", label: item.name, badge: "成就", detail: [item.id, item.description || "未填写说明"], target: { route: { area: "achievements", sub: "" }, selections: { achievement: item.id, ["detail:" + item.id]: "base" } }, x: 0, y: 0, depth: 0 });
+  const addScheme = (id2, surface, depth) => {
+    var _a;
+    const scheme = (_a = c.appearances) == null ? void 0 : _a.find((s) => s.id === id2 && (!s.surface || s.surface === surface));
+    if (!scheme) return "";
+    return add({ id: relationId("scheme", id2, surface), kind: "scheme", label: scheme.name, badge: surface === "card" ? "通用卡片方案" : "通用浮现方案", detail: [id2, scheme.isDefault ? "本组默认方案" : "可复用方案"], target: schemeTarget(id2, surface), x: 0, y: 0, depth });
+  };
+  const addParts = (stage, parent, shared) => {
+    var _a;
+    const links = relationStageStructure(input2, item, stage), depth = shared ? 3 : 2;
+    const target = (surface = "content") => shared ? sharedTarget("default-stage", stage.id, surface) : stageTarget(item.id, stage.id, surface);
+    const partId = (part) => shared ? relationId("default-part", stage.id, part) : relationId(part, item.id, stage.id);
+    for (const part of ["card", "level", "popup"]) {
+      if (part === "level") {
+        const l = links.level, id22 = partId("level-part"), inherit = !!links.shared && !links.own;
+        const label = shared ? "等级" : "等级" + (l ? " · " + l.name : "");
+        const badge = shared ? stage.levelMode === "custom" ? "指定等级" : "成就基础等级" : inherit ? "沿用默认" : stage.levelMode === "custom" ? "指定等级" : "成就基础等级";
+        const detail2 = [stage.levelMode === "custom" ? "指定：" + ((l == null ? void 0 : l.name) ?? stage.levelId) : "使用所属成就的基础等级", ...shared ? ["当前参考成就：" + item.name + " · " + ((l == null ? void 0 : l.name) ?? "无等级")] : []];
+        add({ id: id22, kind: "level-part", label, badge, detail: detail2, target: target(), stageId: stage.id, depth, x: 0, y: 0, expandLabel: "等级来源" });
+        edge(parent, id22, "owns", "等级");
+        if (!expanded.includes(id22) || !l) continue;
+        const lid = add({ id: relationId("level", l.id), kind: "level", label: l.name, badge: "等级配置", detail: [l.id], target: sharedTarget("level", l.id), depth: depth + 1, x: 0, y: 0 });
+        edge(id22, lid, "ref", shared && stage.levelMode !== "custom" ? "本成就解析为" : "使用等级");
+        for (const surface of ["card", "popup"]) {
+          const preset = levelPresetId(l, surface), pid = preset && addScheme(preset, surface, depth + 2);
+          if (pid) edge(lid, pid, "ref", "等级关联");
+        }
+        continue;
+      }
+      const p = links.surfaces.find((p2) => p2.surface === part), id2 = partId(part);
+      const status = shared ? "默认配置" : p.inherited ? "沿用默认" : ((_a = p.ownP) == null ? void 0 : _a.mode) === "custom" || p.localCss.length ? "单独配置" : "本阶段配置";
+      const detail = [
+        shared ? "共用默认阶段：" + stage.name : item.name + " / " + stage.name,
+        status,
+        ...p.localCss.length ? ["含本阶段 CSS 调整"] : [],
+        ...part === "popup" && !input2.notifications ? ["全局浮现已关闭"] : [],
+        ...part === "card" ? ["编排位置：" + interfaceName(p.ui) + " → 双击成就列表 → 网格项模板"] : []
+      ];
+      add({ id: id2, kind: part, label: part === "card" ? "卡片" : "浮现", badge: (p.p.enabled ? "" : "不输出 · ") + status, detail, target: target(part), stageId: stage.id, depth, x: 0, y: 0, expandLabel: part === "card" ? "卡片来源" : "浮现来源" });
+      edge(parent, id2, "owns", part === "card" ? "卡片" : "浮现");
+      if (!expanded.includes(id2)) continue;
+      if (p.scheme) {
+        const pid = addScheme(p.scheme.id, part, depth + 1);
+        edge(id2, pid, "ref", p.p.appearanceSource === "level" ? "跟随等级" : p.p.appearanceSource === "default" ? "默认方案" : "指定方案");
+      }
+      const uiid = add({ id: relationId("interface", p.ui), kind: "interface", label: interfaceName(p.ui), badge: "界面", ui: p.ui, detail: [p.ui, "个性化 → 所属扩展 → 对应界面"], target: interfaceTarget(p.ui), depth: depth + 2, x: 0, y: 0 });
+      if (part === "card") {
+        const tid = add({ id: relationId("template", p.ui), kind: "template", label: "卡片模板", badge: interfaceName(p.ui), ui: p.ui, detail: [p.ui, "打开对应成就页 → 双击成就列表 → 网格项模板"], target: interfaceTarget(p.ui, true), depth: depth + 1, x: 0, y: 0 });
+        edge(id2, tid, "ref", p.p.enabled ? "编排" : "已配置 · 不输出");
+        edge(tid, uiid, "ref", "所属页面");
+      } else edge(id2, uiid, "ref", p.p.enabled ? "浮现界面" : "已配置 · 不输出");
+    }
+  };
+  for (const stage of shown) {
+    const links = relationStageStructure(input2, item, stage), sid = relationId("stage", item.id, stage.id);
+    const name = stage.nameMode === "base" ? item.name : stage.nameMode === "custom" ? stage.displayName : "不显示";
+    const description = stage.descriptionMode === "base" ? item.description : stage.descriptionMode === "custom" ? stage.description : "不显示";
+    add({ id: sid, kind: "stage", stageId: stage.id, label: stage.name, badge: stage.id === item.initialStageId ? "初始阶段" : links.fullyInherited ? "沿用默认" : "有单独配置", detail: [stage.id, links.fullyInherited ? "完整沿用默认阶段" : "本阶段有单独配置", "名称：" + name, "说明：" + (description || "未填写")], target: stageTarget(item.id, stage.id), depth: 1, x: 0, y: 0 });
+    edge(aid, sid, "owns", "阶段");
+    if (links.fullyInherited) {
+      const did = add({ id: relationId("default", stage.id), kind: "default", label: links.shared.name, badge: "默认阶段", stageId: stage.id, detail: ["共用配置", stage.id], target: sharedTarget("default-stage", stage.id), depth: 2, x: 0, y: 0, expandLabel: "卡片、等级、浮现" });
+      edge(sid, did, "ref", "沿用默认");
+      if (expanded.includes(did)) addParts(stage, did, true);
+    } else addParts(stage, sid, false);
+  }
+  if (nodes.has(referenceNode)) {
+    const grouped = /* @__PURE__ */ new Map();
+    for (const r of references) {
+      if (r.achievementId === focusId) continue;
+      const g = grouped.get(r.achievementId) ?? [];
+      g.push(r);
+      grouped.set(r.achievementId, g);
+    }
+    for (const [id2, refs] of grouped) {
+      const r = refs[0], rid = add({ id: relationId("achievement", id2), kind: "achievement", label: r.name, badge: `${refs.length} 个关联阶段`, detail: refs.map((s) => s.stageName + " · " + s.stageId), target: stageTarget(id2, r.stageId), depth: 2, x: 0, y: 0 });
+      edge(rid, referenceNode, "ref", "引用");
+    }
+  }
+  const result2 = [...nodes.values()];
+  radialLayout(result2, edges, aid);
+  return { nodes: result2, edges };
+}
+function graphPositions(data, previous = {}) {
+  return Object.fromEntries(data.nodes.map((n) => [n.id, previous[n.id] ? { ...previous[n.id] } : { x: n.x, y: n.y, vx: 0, vy: 0, hx: n.x, hy: n.y }]));
+}
+function stepGraph(data, points, held = "", dt = 1) {
+  const step = Math.max(0.25, Math.min(2, dt)), force = new Map(data.nodes.map((n) => [n.id, { x: 0, y: 0 }]));
+  for (const n of data.nodes) {
+    const p = points[n.id], f = force.get(n.id);
+    f.x += (p.hx - p.x) * 0.012;
+    f.y += (p.hy - p.y) * 0.012;
+  }
+  for (const e of data.edges) {
+    const a = points[e.from], b = points[e.to];
+    if (!a || !b) continue;
+    const dx = b.x - a.x, dy = b.y - a.y, d = Math.max(1, Math.hypot(dx, dy));
+    const home = Math.max(120, Math.hypot(b.hx - a.hx, b.hy - a.hy)), f = (d - home) * 0.018;
+    force.get(e.from).x += dx / d * f;
+    force.get(e.from).y += dy / d * f;
+    force.get(e.to).x -= dx / d * f;
+    force.get(e.to).y -= dy / d * f;
+  }
+  for (let i = 0; i < data.nodes.length; i++) for (let j = i + 1; j < data.nodes.length; j++) {
+    const a = points[data.nodes[i].id], b = points[data.nodes[j].id];
+    let dx = b.x - a.x, dy = b.y - a.y;
+    const ox = 175 - Math.abs(dx), oy = 76 - Math.abs(dy);
+    if (ox <= 0 || oy <= 0) continue;
+    if (Math.abs(dx) + Math.abs(dy) < 0.01) dy = 1;
+    const fx = ox < oy ? Math.sign(dx || 1) * ox * 0.08 : 0, fy = ox < oy ? 0 : Math.sign(dy || 1) * oy * 0.08;
+    force.get(data.nodes[i].id).x -= fx;
+    force.get(data.nodes[j].id).x += fx;
+    force.get(data.nodes[i].id).y -= fy;
+    force.get(data.nodes[j].id).y += fy;
+  }
+  let speed = 0;
+  for (const n of data.nodes) {
+    const p = points[n.id];
+    if (n.id === held) {
+      p.vx = p.vy = 0;
+      continue;
+    }
+    const f = force.get(n.id);
+    p.vx = Math.max(-24, Math.min(24, (p.vx + f.x * step) * Math.pow(0.84, step)));
+    p.vy = Math.max(-24, Math.min(24, (p.vy + f.y * step) * Math.pow(0.84, step)));
+    p.x += p.vx * step;
+    p.y += p.vy * step;
+    speed = Math.max(speed, Math.abs(p.vx) + Math.abs(p.vy));
+  }
+  return speed;
+}
+function fitGraph(points) {
+  const p = Object.values(points);
+  if (!p.length) return { x: 500, y: 310, scale: 1 };
+  const minX = Math.min(...p.map((v) => v.x)) - 100, maxX = Math.max(...p.map((v) => v.x)) + 100, minY = Math.min(...p.map((v) => v.y)) - 70, maxY = Math.max(...p.map((v) => v.y)) + 70;
+  const scale = Math.min(1.15, 900 / (maxX - minX), 520 / (maxY - minY));
+  return { x: 500 - (minX + maxX) / 2 * scale, y: 310 - (minY + maxY) / 2 * scale, scale };
+}
+function zoomGraph(camera, factor, x2 = 500, y = 310) {
+  const scale = Math.max(0.15, Math.min(2.5, camera.scale * factor)), r = scale / camera.scale;
+  return { x: x2 - (x2 - camera.x) * r, y: y - (y - camera.y) * r, scale };
+}
+const relationStyle = `
+.aw-graph{min-width:0}.aw-graph-root-picker{margin:8px 0 14px}.aw-graph-root-picker summary{cursor:pointer}.aw-graph-root-picker .aw-object-list{max-height:340px;overflow:auto;margin-top:8px}
+.aw-graph-toolbar{margin:8px 0}.aw-graph-toolbar output{min-width:3em;text-align:center}.aw-graph-canvas{width:100%;height:clamp(360px,65vh,680px);display:block;touch-action:none;overscroll-behavior:contain;border:1px solid var(--border-default);border-radius:12px;background-color:var(--bg-canvas);background-image:radial-gradient(var(--border-subtle) 1px,transparent 1px);background-size:20px 20px;cursor:grab}
+.aw-graph-canvas:active{cursor:grabbing}.aw-graph-edge path{fill:none;stroke:var(--fg-secondary);stroke-width:1.5;opacity:.38;pointer-events:none}.aw-graph-edge.ref path{stroke-dasharray:6 5}.aw-graph-edge[data-active="true"] path{stroke:var(--accent,#c44840);opacity:.85;stroke-width:2.5}.aw-graph-edge text{font-size:13px;fill:var(--fg-primary);text-anchor:middle;paint-order:stroke;stroke:var(--bg-canvas);stroke-width:5px;pointer-events:none}
+.aw-graph-canvas [data-graph-node]{cursor:grab;outline:none}.aw-graph-canvas rect{fill:var(--bg-subtle);stroke:var(--border-default);stroke-width:2}.aw-graph-canvas [data-kind="achievement"] rect{stroke:var(--accent,#c44840)}.aw-graph-canvas [data-kind="stage"] rect{stroke:var(--fg-secondary)}.aw-graph-canvas [data-selected="true"] rect{stroke:var(--accent,#c44840);stroke-width:4;fill:var(--bg-selected,var(--bg-muted))}.aw-graph-canvas [data-related="true"]:not([data-selected="true"]) rect{stroke-width:2.5}.aw-graph-canvas [data-graph-node]:focus-visible rect{stroke:var(--accent,#c44840);stroke-dasharray:4 3}
+.aw-graph-canvas text{pointer-events:none;user-select:none;text-anchor:middle}.aw-graph-name{font-size:17px;font-weight:600;fill:var(--fg-primary)}.aw-graph-badge{font-size:12px;fill:var(--fg-secondary)}.aw-graph-legend{display:flex;gap:18px;font-size:.8em;color:var(--fg-secondary);margin:8px 0}.aw-graph-detail{padding:14px;border:1px solid var(--border-default);border-radius:8px;display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap}.aw-graph-detail small{font-size:.8em;font-weight:400;color:var(--fg-secondary)}
+`;
+function RelationGraph() {
+  const [groups] = useSetting("main.groupCatalog");
+  const [levels] = useSetting("main.levels"), [items] = useSetting("main.achievements"), [stages] = useSetting("main.displayStages"), [defaults] = useSetting("main.defaultStages"), [schemes] = useSetting("main.appearances"), [css] = useSetting("main.elementCss"), [presentations] = useSetting("main.stagePresentations");
+  const [page] = useSetting("main.page"), [popup] = useSetting("main.popup"), [notifications] = useSetting("main.notifications");
+  const nav = useNavigation();
+  const parsed = useMemo(() => {
+    try {
+      return { input: { catalog: catalog((levels == null ? void 0 : levels.length) ? levels : DEFAULT_LEVELS, items ?? [], stages ?? [], defaults ?? [], schemes ?? [], css ?? [], presentations ?? [], groups ?? []), page: page || "ui:@mixing-entropy.achievement/achievements", popup: popup || "ui:@mixing-entropy.achievement/achievement-popup", notifications: notifications !== false } };
+    } catch (e) {
+      return { error: String(e) };
+    }
+  }, [levels, items, stages, defaults, schemes, css, presentations, groups, page, popup, notifications]);
+  if (!parsed.input) return /* @__PURE__ */ jsxs("p", { role: "alert", children: [
+    "无法读取关联：",
+    parsed.error
+  ] });
+  const input2 = parsed.input, item = input2.catalog.achievements.find((a) => a.id === nav.selections["graph-achievement"]);
+  return /* @__PURE__ */ jsxs(Fragment, { children: [
+    /* @__PURE__ */ jsxs("h2", { children: [
+      "成就关联图",
+      item ? " · " + item.name : ""
+    ] }),
+    /* @__PURE__ */ jsxs("details", { className: "aw-graph-root-picker", children: [
+      /* @__PURE__ */ jsx("summary", { children: "选择成就" }),
+      /* @__PURE__ */ jsx(ObjectList, { title: "关联图成就", items: input2.catalog.achievements, selected: (item == null ? void 0 : item.id) ?? "", onSelect: (id2) => nav.select("graph-achievement", id2) })
+    ] }),
+    item ? /* @__PURE__ */ jsxs(EditorScope, { id: "relations:" + item.id, children: [
+      /* @__PURE__ */ jsx(GroupSourceSummary, { achievement: item.id }),
+      /* @__PURE__ */ jsx(GraphView, { input: input2, achievementId: item.id, initialStage: nav.selections["stage:" + item.id] || item.initialStageId })
+    ] }, item.id) : /* @__PURE__ */ jsx("p", { children: "选择一个成就查看关联。" })
+  ] });
+}
+const noExpandedNodes = [];
+function GraphView({ input: input2, achievementId, initialStage }) {
+  const nav = useNavigation(), [expanded, setExpanded] = useEditorState("expanded", noExpandedNodes), [selected, setSelected] = useEditorState("selected", relationId("achievement", achievementId));
+  const [referenceNode, setReferenceNode] = useEditorState("reference-node", ""), [refPage, setRefPage] = useEditorState("ref-page", 0);
+  const stages = useMemo(() => resolveStages(achievementId, input2.catalog.defaultStages, input2.catalog.stages), [input2, achievementId]);
+  const [savedPage, setPage] = useEditorState("stage-page", Math.floor(Math.max(0, stages.findIndex((s) => s.id === initialStage)) / 50));
+  const page = Math.min(savedPage, Math.max(0, Math.ceil(stages.length / 50) - 1));
+  const references = useMemo(() => referenceNode ? relationReferrers(input2, referenceNode) : [], [input2, referenceNode]);
+  const pages = Math.max(1, Math.ceil(references.length / 20)), effectiveRefPage = Math.min(refPage, pages - 1), shownRefs = references.slice(effectiveRefPage * 20, effectiveRefPage * 20 + 20);
+  const data = useMemo(() => buildRelations(input2, achievementId, expanded, page, shownRefs, referenceNode), [input2, achievementId, expanded, page, references, effectiveRefPage, referenceNode]);
+  const [savedView, setSavedView] = useEditorState("view", void 0);
+  const positions = useRef((savedView == null ? void 0 : savedView.positions) ?? {}), camera = useRef((savedView == null ? void 0 : savedView.camera) ?? { x: 0, y: 0, scale: 1 }), mounted = useRef(false), svg = useRef(null);
+  const [, render] = useState(0), frame = useRef(0), ticks = useRef(0), lastTime = useRef(0), settled = useRef(0), suppressDouble = useRef(0);
+  const drag = useRef(null);
+  const persist = useRef(() => {
+  });
+  persist.current = () => setSavedView({ positions: Object.fromEntries(Object.entries(positions.current).map(([id2, p]) => [id2, { ...p }])), camera: { ...camera.current } });
+  const currentData = useRef(data);
+  currentData.current = data;
+  const wake = () => {
+    ticks.current = 0;
+    settled.current = 0;
+    if (frame.current || typeof requestAnimationFrame === "undefined") return;
+    const tick = (time) => {
+      var _a;
+      frame.current = 0;
+      const dt = lastTime.current ? Math.min(2, (time - lastTime.current) / 16.67) : 1;
+      lastTime.current = time;
+      const speed = stepGraph(currentData.current, positions.current, (_a = drag.current) == null ? void 0 : _a.id, dt);
+      render((v) => v + 1);
+      ticks.current++;
+      settled.current = speed < 0.025 ? settled.current + 1 : 0;
+      if (drag.current || settled.current < 12 && ticks.current < 400) frame.current = requestAnimationFrame(tick);
+      else {
+        lastTime.current = 0;
+        persist.current();
+      }
+    };
+    frame.current = requestAnimationFrame(tick);
+  };
+  useEffect(() => {
+    positions.current = { ...positions.current, ...graphPositions(data, positions.current) };
+    if (!mounted.current) {
+      if (!savedView) camera.current = fitGraph(Object.fromEntries(data.nodes.map((n) => [n.id, positions.current[n.id]])));
+      mounted.current = true;
+    }
+    wake();
+    render((v) => v + 1);
+  }, [data]);
+  useEffect(() => () => {
+    if (frame.current) cancelAnimationFrame(frame.current);
+    persist.current();
+  }, []);
+  const point = (clientX, clientY) => {
+    var _a, _b, _c;
+    const matrix = (_b = (_a = svg.current) == null ? void 0 : _a.getScreenCTM) == null ? void 0 : _b.call(_a);
+    if (matrix) {
+      const p = new DOMPoint(clientX, clientY).matrixTransform(matrix.inverse());
+      return { x: p.x, y: p.y };
+    }
+    const box = (_c = svg.current) == null ? void 0 : _c.getBoundingClientRect();
+    return { x: (clientX - ((box == null ? void 0 : box.left) ?? 0)) * 1e3 / ((box == null ? void 0 : box.width) || 1e3), y: (clientY - ((box == null ? void 0 : box.top) ?? 0)) * 620 / ((box == null ? void 0 : box.height) || 620) };
+  };
+  const start = (e) => {
+    if (e.button !== 0) return;
+    const p = point(e.clientX, e.clientY), target = e.target.closest("[data-graph-node]"), id2 = (target == null ? void 0 : target.getAttribute("data-graph-node")) ?? "";
+    if (id2) {
+      setSelected(id2);
+      target == null ? void 0 : target.focus();
+    }
+    const n = positions.current[id2];
+    drag.current = { id: id2, pointer: e.pointerId, startX: e.clientX, startY: e.clientY, px: p.x, py: p.y, cam: { ...camera.current }, offsetX: n ? n.x - (p.x - camera.current.x) / camera.current.scale : 0, offsetY: n ? n.y - (p.y - camera.current.y) / camera.current.scale : 0, moved: false };
+    e.preventDefault();
+  };
+  const move = (e) => {
+    var _a, _b;
+    const d = drag.current;
+    if (!d || d.pointer !== e.pointerId) return;
+    const p = point(e.clientX, e.clientY);
+    if (!d.moved && Math.hypot(e.clientX - d.startX, e.clientY - d.startY) > 4) {
+      d.moved = true;
+      (_b = (_a = svg.current) == null ? void 0 : _a.setPointerCapture) == null ? void 0 : _b.call(_a, e.pointerId);
+    }
+    if (!d.moved) return;
+    if (d.id) {
+      const n = positions.current[d.id];
+      n.x = (p.x - camera.current.x) / camera.current.scale + d.offsetX;
+      n.y = (p.y - camera.current.y) / camera.current.scale + d.offsetY;
+      wake();
+    } else camera.current = { ...d.cam, x: d.cam.x + p.x - d.px, y: d.cam.y + p.y - d.py };
+    render((v) => v + 1);
+  };
+  const end = (e) => {
+    var _a, _b;
+    const d = drag.current;
+    if (!d || d.pointer !== e.pointerId) return;
+    if (d.id && d.moved) {
+      const n = positions.current[d.id];
+      n.hx = n.x;
+      n.hy = n.y;
+    }
+    if (d.moved) suppressDouble.current = Date.now() + 350;
+    drag.current = null;
+    if ((_b = (_a = svg.current) == null ? void 0 : _a.hasPointerCapture) == null ? void 0 : _b.call(_a, e.pointerId)) svg.current.releasePointerCapture(e.pointerId);
+    persist.current();
+    if (d.moved) wake();
+  };
+  const open = (node22) => {
+    persist.current();
+    nav.locate(node22.target);
+  };
+  const zoom = (factor, x2 = 500, y = 310) => {
+    camera.current = zoomGraph(camera.current, factor, x2, y);
+    render((v) => v + 1);
+    persist.current();
+  };
+  useEffect(() => {
+    const canvas = svg.current;
+    if (!canvas) return;
+    const wheel = (e) => {
+      if (!e.ctrlKey) return;
+      e.preventDefault();
+      e.stopPropagation();
+      const p = point(e.clientX, e.clientY);
+      zoom(Math.exp(-Math.max(-100, Math.min(100, e.deltaY)) * 6e-3), p.x, p.y);
+    };
+    canvas.addEventListener("wheel", wheel, { passive: false });
+    return () => canvas.removeEventListener("wheel", wheel);
+  }, []);
+  const node2 = data.nodes.find((n) => n.id === selected), activeEdges = data.edges.filter((e) => e.from === selected || e.to === selected), neighbors = new Set(activeEdges.flatMap((e) => [e.from, e.to]));
+  const canRefs = node2 && ["default", "level", "scheme", "interface", "template"].includes(node2.kind);
+  const referenceVisible = data.nodes.some((n) => n.id === referenceNode);
+  return /* @__PURE__ */ jsxs("div", { className: "aw-graph", children: [
+    /* @__PURE__ */ jsx("style", { children: relationStyle }),
+    /* @__PURE__ */ jsxs("div", { className: "aw-actions aw-graph-toolbar", children: [
+      /* @__PURE__ */ jsx(Button, { onClick: () => zoom(1 / 1.2), children: "缩小图" }),
+      /* @__PURE__ */ jsxs("output", { "aria-label": "关联图缩放", children: [
+        Math.round(camera.current.scale * 100),
+        "%"
+      ] }),
+      /* @__PURE__ */ jsx(Button, { onClick: () => zoom(1.2), children: "放大图" }),
+      /* @__PURE__ */ jsx(Button, { onClick: () => {
+        camera.current = fitGraph(Object.fromEntries(data.nodes.map((n) => [n.id, positions.current[n.id] ?? { ...n, vx: 0, vy: 0, hx: n.x, hy: n.y }])));
+        render((v) => v + 1);
+        persist.current();
+      }, children: "适应全图" }),
+      /* @__PURE__ */ jsx(Button, { onClick: () => {
+        positions.current = graphPositions(data);
+        camera.current = fitGraph(positions.current);
+        persist.current();
+        wake();
+      }, children: "整理布局" }),
+      /* @__PURE__ */ jsx("span", { className: "aw-note", children: "拖动节点或空白处 · Ctrl + 滚轮缩放 · 双击定位" })
+    ] }),
+    stages.length > 50 && /* @__PURE__ */ jsxs("div", { className: "aw-actions", children: [
+      /* @__PURE__ */ jsx(Button, { disabled: !page, onClick: () => setPage(page - 1), children: "上一组阶段" }),
+      /* @__PURE__ */ jsxs("span", { children: [
+        "阶段 ",
+        page * 50 + 1,
+        "—",
+        Math.min(stages.length, (page + 1) * 50),
+        " / ",
+        stages.length
+      ] }),
+      /* @__PURE__ */ jsx(Button, { disabled: (page + 1) * 50 >= stages.length, onClick: () => setPage(page + 1), children: "下一组阶段" })
+    ] }),
+    /* @__PURE__ */ jsx("svg", { className: "aw-graph-canvas", ref: svg, viewBox: "0 0 1000 620", "aria-label": "成就关联图画布", onPointerDown: start, onPointerMove: move, onPointerUp: end, onPointerCancel: end, onLostPointerCapture: end, children: /* @__PURE__ */ jsxs("g", { transform: `translate(${camera.current.x} ${camera.current.y}) scale(${camera.current.scale})`, children: [
+      data.edges.map((e) => {
+        const a = positions.current[e.from], b = positions.current[e.to];
+        if (!a || !b) return null;
+        const active = e.from === selected || e.to === selected;
+        return /* @__PURE__ */ jsxs("g", { className: "aw-graph-edge " + e.type, "data-active": active, children: [
+          /* @__PURE__ */ jsx("path", { d: `M ${a.x} ${a.y} Q ${(a.x + b.x) / 2} ${(a.y + b.y) / 2 + Math.min(28, Math.abs(b.x - a.x) * 0.06)} ${b.x} ${b.y}` }),
+          active && /* @__PURE__ */ jsx("text", { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 - 10, children: e.label })
+        ] }, JSON.stringify(e));
+      }),
+      data.nodes.map((n) => {
+        const p = positions.current[n.id] ?? n;
+        return /* @__PURE__ */ jsxs("g", { role: "button", tabIndex: 0, "aria-label": `${n.badge}：${n.label}`, "data-graph-node": n.id, "data-kind": n.kind, "data-selected": selected === n.id, "data-related": neighbors.has(n.id), transform: `translate(${p.x} ${p.y})`, onDoubleClick: () => {
+          if (Date.now() > suppressDouble.current) open(n);
+        }, onKeyDown: (e) => {
+          if (e.key === "Enter") {
+            e.preventDefault();
+            open(n);
+          }
+          if (e.key === " ") {
+            e.preventDefault();
+            setSelected(n.id);
+          }
+        }, onFocus: () => setSelected(n.id), children: [
+          /* @__PURE__ */ jsx("title", { children: [n.label, n.badge, ...n.detail].join("\n") }),
+          /* @__PURE__ */ jsx("rect", { x: "-82", y: "-32", width: "164", height: "64", rx: "16" }),
+          /* @__PURE__ */ jsx("text", { y: "-3", className: "aw-graph-name", children: n.label.length > 11 ? n.label.slice(0, 10) + "…" : n.label }),
+          /* @__PURE__ */ jsx("text", { y: "19", className: "aw-graph-badge", children: n.badge })
+        ] }, n.id);
+      })
+    ] }) }),
+    /* @__PURE__ */ jsxs("div", { className: "aw-graph-legend", children: [
+      /* @__PURE__ */ jsx("span", { children: "━ 归属" }),
+      /* @__PURE__ */ jsx("span", { children: "┄ 引用 / 沿用" }),
+      /* @__PURE__ */ jsxs("span", { children: [
+        data.nodes.length,
+        " 个节点"
+      ] })
+    ] }),
+    node2 && /* @__PURE__ */ jsxs("aside", { className: "aw-graph-detail", children: [
+      /* @__PURE__ */ jsxs("div", { children: [
+        /* @__PURE__ */ jsxs("h3", { children: [
+          node2.label,
+          " ",
+          /* @__PURE__ */ jsx("small", { children: node2.badge })
+        ] }),
+        node2.detail.map((d, i) => /* @__PURE__ */ jsx("p", { className: "aw-note", children: d }, i))
+      ] }),
+      /* @__PURE__ */ jsxs("div", { className: "aw-actions", children: [
+        /* @__PURE__ */ jsx(Button, { onClick: () => open(node2), children: "定位编辑" }),
+        node2.expandLabel && /* @__PURE__ */ jsx(Button, { onClick: () => setExpanded(expanded.includes(node2.id) ? expanded.filter((id2) => id2 !== node2.id) : [...expanded, node2.id]), children: (expanded.includes(node2.id) ? "收起" : "展开") + node2.expandLabel }),
+        canRefs && /* @__PURE__ */ jsx(Button, { onClick: () => {
+          setReferenceNode(referenceNode === node2.id ? "" : node2.id);
+          setRefPage(0);
+        }, children: referenceNode === node2.id ? "收起引用成就" : "查看引用成就" }),
+        node2.kind === "achievement" && node2.id !== relationId("achievement", achievementId) && /* @__PURE__ */ jsx(Button, { onClick: () => nav.select("graph-achievement", JSON.parse(node2.id)[1]), children: "以此成就为中心" })
+      ] })
+    ] }),
+    referenceNode && referenceVisible && /* @__PURE__ */ jsxs("section", { className: "aw-section", children: [
+      /* @__PURE__ */ jsxs("h3", { children: [
+        "引用情况（",
+        references.length,
+        " 个阶段）"
+      ] }),
+      /* @__PURE__ */ jsx("div", { className: "aw-actions", children: shownRefs.map((r) => /* @__PURE__ */ jsxs(Button, { onClick: () => {
+        nav.locate({ route: { area: "achievements", sub: "" }, selections: { achievement: r.achievementId, ["detail:" + r.achievementId]: "stages", ["stage:" + r.achievementId]: r.stageId, ["surface:" + r.achievementId + ":" + r.stageId]: "content" } });
+      }, children: [
+        r.name,
+        " / ",
+        r.stageName
+      ] }, r.achievementId + "/" + r.stageId)) }),
+      !references.length && /* @__PURE__ */ jsx("p", { className: "aw-note", children: "没有成就引用此配置。" }),
+      pages > 1 && /* @__PURE__ */ jsxs("div", { className: "aw-actions", children: [
+        /* @__PURE__ */ jsx(Button, { disabled: !effectiveRefPage, onClick: () => setRefPage(effectiveRefPage - 1), children: "上一页引用" }),
+        /* @__PURE__ */ jsxs("span", { children: [
+          effectiveRefPage + 1,
+          " / ",
+          pages
+        ] }),
+        /* @__PURE__ */ jsx(Button, { disabled: effectiveRefPage + 1 >= pages, onClick: () => setRefPage(effectiveRefPage + 1), children: "下一页引用" })
+      ] })
+    ] })
+  ] });
+}
+function RelationInterface() {
+  const nav = useNavigation(), ref = nav.selections["interface-ref"] ?? "", template = nav.selections["interface-template"] === "yes";
+  return /* @__PURE__ */ jsxs("section", { className: "aw-section", children: [
+    /* @__PURE__ */ jsxs("h2", { children: [
+      template ? "卡片模板 · " : "",
+      interfaceName(ref)
+    ] }),
+    /* @__PURE__ */ jsx(UIRefPicker, { value: ref, disabled: true, onChange: () => {
+    }, ariaLabel: "关联界面" }),
+    /* @__PURE__ */ jsx("p", { className: "aw-note", children: ref }),
+    /* @__PURE__ */ jsx("h3", { children: "编排位置" }),
+    /* @__PURE__ */ jsxs("p", { children: [
+      "个性化 → ",
+      ref.split("/")[0],
+      " → ",
+      interfaceName(ref),
+      template ? " → 双击成就列表 → 网格项模板" : ""
+    ] }),
+    /* @__PURE__ */ jsx("p", { className: "aw-note", children: "在官方编辑器中打开此界面，调整位置与动画。" }),
+    template && /* @__PURE__ */ jsx(Button, { onClick: () => nav.jump({ area: "interfaces", sub: "cards" }, "appearance:card", "$template"), children: "查看模板与尺寸" })
+  ] });
+}
+function ContentPreview({ item, stage, surface = "card", scheme }) {
+  const [items] = useSetting("main.achievements"), [levels] = useSetting("main.levels");
+  const [defaults] = useSetting("main.defaultStages"), [overrides] = useSetting("main.displayStages");
+  const [presets] = useSetting("main.appearances"), [css] = useSetting("main.elementCss"), [surfaces] = useSetting("main.stagePresentations");
+  const [groups] = useSetting("main.groupCatalog");
+  const [refId, setRef] = useEditorState("preview-achievement", ""), [stageId, setStage] = useEditorState("preview-stage", "");
+  const reference = item ?? (items == null ? void 0 : items.find((a) => a.id === refId)) ?? (items == null ? void 0 : items[0]);
+  const stages = reference ? resolveStages(reference.id, defaults, overrides) : [];
+  const chosen = stage ?? stages.find((s) => s.id === stageId) ?? stages[0];
+  let view, error = "";
+  try {
+    if (reference && chosen) {
+      const defs = catalog((levels == null ? void 0 : levels.length) ? levels : DEFAULT_LEVELS, items ?? [], overrides ?? [], defaults ?? [], presets ?? [], css ?? [], surfaces ?? [], groups ?? []);
+      if (scheme) defs.presentations = [...(defs.presentations ?? []).filter((p) => !(p.achievementId === reference.id && p.stageId === chosen.id && p.surface === surface)), { achievementId: reference.id, stageId: chosen.id, surface, mode: "custom", enabled: true, contentOverride: false, appearanceSource: "preset", appearanceId: scheme.id }];
+      view = projectPresentation(defs, defs.achievements.find((a) => a.id === reference.id) ?? reference, chosen, surface);
+    }
+  } catch (e) {
+    error = String(e);
+  }
+  return /* @__PURE__ */ jsxs(Fragment, { children: [
+    /* @__PURE__ */ jsx("h3", { children: "有效内容示意" }),
+    !item && /* @__PURE__ */ jsxs(Fragment, { children: [
+      /* @__PURE__ */ jsx("p", { className: "aw-note", children: "参考成就" }),
+      /* @__PURE__ */ jsx(Select, { value: (reference == null ? void 0 : reference.id) ?? "", options: (items ?? []).map((a) => ({ value: a.id, label: a.name })), onChange: setRef }),
+      !stage && /* @__PURE__ */ jsx(Select, { value: (chosen == null ? void 0 : chosen.id) ?? "", options: stages.map((s) => ({ value: s.id, label: s.name })), onChange: setStage })
+    ] }),
+    error ? /* @__PURE__ */ jsx("p", { role: "alert", children: error }) : view ? /* @__PURE__ */ jsxs("div", { className: "aw-preview-card", children: [
+      /* @__PURE__ */ jsx(ImagePreview, { layers: view.icon ? [view.icon] : [], alt: "当前有效图标", fallback: view.iconMode === "unknown" ? "？" : "无图标" }),
+      /* @__PURE__ */ jsx("h3", { children: view.name || "名称不显示" }),
+      /* @__PURE__ */ jsx("p", { style: { whiteSpace: "pre-wrap" }, children: view.description || "说明不显示" }),
+      /* @__PURE__ */ jsx("small", { children: view.levelName || "等级不显示" })
+    ] }) : /* @__PURE__ */ jsx("p", { className: "aw-note", children: reference ? "本阶段不输出此项。" : "添加成就后可选择参考内容。" }),
+    /* @__PURE__ */ jsx("p", { className: "aw-note", children: "排版、CSS 与动画请在官方预览查看。" })
   ] });
 }
 const object = (v) => v && typeof v === "object" && !Array.isArray(v) ? v : {};
@@ -4543,29 +6040,15 @@ function readCardSizeReference(value, selectedPage) {
   return record;
 }
 const note$3 = { color: "var(--fg-secondary)" };
-function Numeric({ value, onChange, min = 0, max = 4096 }) {
-  return /* @__PURE__ */ jsx(
-    "input",
-    {
-      type: "number",
-      value,
-      min,
-      max,
-      step: 1,
-      style: { width: "100%", padding: 10, border: "1px solid var(--border-default)", borderRadius: 6, color: "var(--fg-primary)", background: "var(--bg-canvas)" },
-      onChange: (e) => {
-        const n = e.currentTarget.valueAsNumber;
-        if (Number.isFinite(n) && n >= min && n <= max) onChange(n);
-      }
-    }
-  );
-}
 const choices$1 = (values) => Object.entries(values).map(([value, label]) => ({ value, label }));
 function CardAppearanceEditor({ value, patch, groups = ["background", "frame", "effects"] }) {
   const v = cardAppearance(value);
-  const select = (key, labels) => /* @__PURE__ */ jsx(Select$1, { value: String(v[key]), options: choices$1(labels), onChange: (next) => patch({ [key]: next }) });
+  const [category, setCategory] = useEditorState("appearance-category", groups[0] ?? "background");
+  const active = groups.includes(category) ? category : groups[0];
+  const select = (key, labels2) => /* @__PURE__ */ jsx(Select, { value: String(v[key]), options: choices$1(labels2), onChange: (next) => patch({ [key]: next }) });
   return /* @__PURE__ */ jsxs(Fragment, { children: [
-    groups.includes("background") && /* @__PURE__ */ jsxs(Section, { title: "背景", collapsible: true, defaultOpen: false, children: [
+    /* @__PURE__ */ jsx(Tabs, { label: "外观类别", value: active ?? "", onChange: setCategory, items: [{ id: "background", name: "背景" }, { id: "frame", name: "边框" }, { id: "effects", name: "动效" }].filter((i) => groups.includes(i.id)) }),
+    active === "background" && /* @__PURE__ */ jsxs(Section, { title: "背景", collapsible: true, defaultOpen: false, children: [
       /* @__PURE__ */ jsx(FieldRow, { label: "背景方式", children: select("backgroundMode", { template: "使用各自界面原样", color: "颜色", image: "图片", gradient: "双色渐变" }) }),
       v.backgroundMode !== "template" && /* @__PURE__ */ jsx(FieldRow, { label: "底色", children: /* @__PURE__ */ jsx(ColorPicker, { value: v.backgroundColor, onChange: (backgroundColor) => patch({ backgroundColor }) }) }),
       v.backgroundMode === "gradient" && /* @__PURE__ */ jsxs(Fragment, { children: [
@@ -4579,7 +6062,7 @@ function CardAppearanceEditor({ value, patch, groups = ["background", "frame", "
         /* @__PURE__ */ jsx(FieldRow, { label: "纵向焦点（%）", description: "0 为顶部，50 为居中，100 为底部。", children: /* @__PURE__ */ jsx(Numeric, { value: v.backgroundY, max: 100, onChange: (backgroundY) => patch({ backgroundY }) }) })
       ] })
     ] }),
-    groups.includes("frame") && /* @__PURE__ */ jsxs(Section, { title: "边框", collapsible: true, defaultOpen: false, children: [
+    active === "frame" && /* @__PURE__ */ jsxs(Section, { title: "边框", collapsible: true, defaultOpen: false, children: [
       /* @__PURE__ */ jsx(FieldRow, { label: "边框方式", children: select("frameMode", { template: "使用各自界面原样", none: "不显示", line: "线框", nineSlice: "图片九宫格" }) }),
       (v.frameMode === "line" || v.frameMode === "nineSlice") && /* @__PURE__ */ jsxs(Fragment, { children: [
         /* @__PURE__ */ jsx(FieldRow, { label: "边框颜色", description: "线框颜色；九宫格图片未就绪时也用此颜色。", children: /* @__PURE__ */ jsx(ColorPicker, { value: v.frameColor, onChange: (frameColor) => patch({ frameColor }) }) }),
@@ -4593,14 +6076,14 @@ function CardAppearanceEditor({ value, patch, groups = ["background", "frame", "
         /* @__PURE__ */ jsx(FieldRow, { label: "边缘适配", children: select("frameRepeat", { stretch: "拉伸", repeat: "平铺", round: "平铺并铺满" }) })
       ] })
     ] }),
-    groups.includes("effects") && /* @__PURE__ */ jsxs(Section, { title: "元素动效", collapsible: true, defaultOpen: false, children: [
+    active === "effects" && /* @__PURE__ */ jsxs(Section, { title: "元素动效", collapsible: true, defaultOpen: false, children: [
       /* @__PURE__ */ jsx(FieldRow, { label: "图标动效", children: select("iconEffect", { none: "无", float: "轻微浮动", rotate: "旋转", pulse: "呼吸" }) }),
       /* @__PURE__ */ jsx(FieldRow, { label: "边框动效", children: select("frameEffect", { none: "无", pulse: "呼吸", glow: "发光" }) }),
       (v.iconEffect !== "none" || v.frameEffect !== "none") && /* @__PURE__ */ jsxs(Fragment, { children: [
         /* @__PURE__ */ jsx(FieldRow, { label: "播放方式", children: select("effectTrigger", { loop: "循环", enter: "出现时一次", hover: "鼠标悬停时循环" }) }),
         /* @__PURE__ */ jsx(FieldRow, { label: "一轮时长（毫秒）", children: /* @__PURE__ */ jsx(Numeric, { value: v.effectDuration, min: 200, max: 6e4, onChange: (effectDuration) => patch({ effectDuration }) }) })
       ] }),
-      /* @__PURE__ */ jsx("p", { style: note$3, children: "切换阶段会停止旧动效；滚出可见范围暂停附加动效。浮现不接收鼠标，悬停动效仅用于卡片。素材本身的逐帧动画由官方图片控件播放，与这里的动效分开。" })
+      /* @__PURE__ */ jsx("p", { style: note$3, children: "悬停动效仅用于卡片；动态图片可直接从素材库选择。" })
     ] })
   ] });
 }
@@ -4648,137 +6131,282 @@ function CardLayoutEditor() {
           new Date(reference.measuredAt).toLocaleString()
         ] })
       ] }) : /* @__PURE__ */ jsx("p", { style: note$3, children: "尚未测到所选页面的卡片尺寸。请先在剧情预览中打开一次成就页，并确保至少有一张可显示的卡片。" }),
-      /* @__PURE__ */ jsx("p", { style: note$3, children: "这是最近预览的参考值，不会改动设计画布或内部元素。改完行列、间距、浏览方式或页面大小后，请重新预览更新。仅支持本扩展内的卡片页面。" })
+      /* @__PURE__ */ jsx("p", { style: note$3, children: "改完行列、间距或页面大小后，请重新预览更新尺寸。尺寸测量支持本扩展内的成就页。" })
     ] }),
     /* @__PURE__ */ jsxs("p", { children: [
       /* @__PURE__ */ jsx("strong", { children: "自由排版入口：" }),
       "官方 UI 编辑器 → 成就页 → 双击画布中的“双击编辑卡片 · 成就列表”区域 →“网格项模板”（单张成就卡片）。"
     ] }),
-    /* @__PURE__ */ jsx("p", { style: note$3, children: "单击列表设置整页行列，双击画布中的列表进入单张卡片。卡片保持作者的坐标、字体和层级；页面变窄后请检查文字与装饰。" }),
-    /* @__PURE__ */ jsx("p", { style: note$3, children: "单卡画布大小：进入“网格项模板”，按 Esc 取消元素选中，在右侧“界面属性 → 设计画布”修改宽度和高度。修改画布不会自动缩放或重排已有元素，内部仍由你摆放。" }),
-    /* @__PURE__ */ jsx("p", { style: note$3, children: "行、列、间距和列表大小在成就页设置；单卡编辑画布目前不会随这些设置自动更新。改好后请在成就页剧情预览中核对实际效果。" }),
-    /* @__PURE__ */ jsx("p", { style: note$3, children: "阶段外观增强用于本扩展内的成就页；卡片使用直接排列的基础元素，分组或条件图层保持原生模板效果。卡片和浮现使用各自的通用方案或阶段专用配置；两个界面的尺寸与排版分别在官方编辑器中设计。" })
+    /* @__PURE__ */ jsx("p", { style: note$3, children: "调整单卡画布：在“网格项模板”按 Esc 取消选中 → 右侧“界面属性 → 设计画布”修改宽高，内部元素自行摆放。画布不会自动跟随行列设置。" }),
+    /* @__PURE__ */ jsx("p", { style: note$3, children: "阶段外观适用于本扩展页面中直接排列的基础元素；分组与条件图层使用原生模板效果。" })
   ] });
 }
+const SORT_LABELS = { level: "阶段等级", stage: "目标阶段", achievement: "成就" };
+function parseNotificationRules(value) {
+  if (value === void 0) return [];
+  if (!Array.isArray(value) || value.length > 3e4) throw Error("浮现排序规则需要结构化列表，最多 30000 项");
+  const rules = /* @__PURE__ */ new Map();
+  for (const row of value) {
+    if (!row || typeof row !== "object" || !Object.prototype.hasOwnProperty.call(SORT_LABELS, row.field) || typeof row.value !== "string" || row.value.length > 128) throw Error("浮现排序规则无效");
+    let rule2 = rules.get(row.field);
+    if (!rule2) {
+      rule2 = { field: row.field, values: [] };
+      rules.set(row.field, rule2);
+    }
+    if (row.value && !rule2.values.includes(row.value)) rule2.values.push(row.value);
+  }
+  return [...rules.values()];
+}
+function flattenNotificationRules(rules) {
+  return rules.flatMap((rule2) => (rule2.values.length ? rule2.values : [""]).map((value) => ({ field: rule2.field, value })));
+}
 const note$2 = { color: "var(--fg-secondary)", fontSize: "0.9em" };
+function moved(values, index, offset) {
+  const next = [...values];
+  const other = index + offset;
+  if (other >= 0 && other < next.length) [next[index], next[other]] = [next[other], next[index]];
+  return next;
+}
+function NotificationOrdering() {
+  const [rows2, setRows] = useSetting("main.notificationSort");
+  const [levels] = useSetting("main.levels");
+  const [items] = useSetting("main.achievements");
+  const [stages] = useSetting("main.displayStages");
+  const [defaults] = useSetting("main.defaultStages");
+  const [error, setError] = useState("");
+  const [dragging, setDragging] = useState(null);
+  let rules;
+  try {
+    rules = parseNotificationRules(rows2);
+  } catch (e) {
+    return /* @__PURE__ */ jsxs("p", { role: "alert", children: [
+      String(e),
+      "；请通过此设置的官方重置入口恢复后重新编排。"
+    ] });
+  }
+  const save = (next) => {
+    const ok = setRows(flattenNotificationRules(next));
+    setError(ok ? "" : "排序保存失败，原规则未修改。");
+  };
+  const change = (index, rule2) => save(rules.map((r, i) => i === index ? rule2 : r));
+  const stageChoices = /* @__PURE__ */ new Map();
+  (items ?? []).forEach((item) => resolveStages(item.id, defaults, stages).forEach((stage) => stageChoices.set(stage.id, stage.name)));
+  const choices2 = (field) => field === "level" ? ((levels == null ? void 0 : levels.length) ? levels : DEFAULT_LEVELS).map((r) => ({ value: r.id, label: `${r.name}（${r.id}）` })) : field === "achievement" ? (items ?? []).map((r) => ({ value: r.id, label: `${r.name}（${r.id}）` })) : [...stageChoices].map(([id2, name]) => ({ value: id2, label: `${name}（${id2}）` }));
+  return /* @__PURE__ */ jsxs(Section, { title: "展示顺序", collapsible: true, defaultOpen: false, description: "按下面规则从上到下比较；每项优先值也是从上到下。结果相同按接收顺序，留空即不改变原顺序。", children: [
+    error && /* @__PURE__ */ jsx("p", { role: "alert", children: error }),
+    rules.map((rule2, index) => /* @__PURE__ */ jsx(
+      RemovalContext,
+      {
+        title: `${index + 1}. ${SORT_LABELS[rule2.field]}`,
+        label: "移除规则",
+        detail: "移除此规则及其优先值。",
+        onRemove: () => save(rules.filter((r) => r.field !== rule2.field)),
+        children: /* @__PURE__ */ jsx("div", { onDragOver: (e) => e.preventDefault(), onDrop: (e) => {
+          e.preventDefault();
+          if (!dragging || dragging.value || dragging.field === rule2.field) return;
+          const next = [...rules];
+          const from = next.findIndex((r) => r.field === dragging.field);
+          if (from < 0) return;
+          next.splice(index, 0, next.splice(from, 1)[0]);
+          save(next);
+          setDragging(null);
+        }, children: /* @__PURE__ */ jsxs(Section, { title: `${index + 1}. ${SORT_LABELS[rule2.field]}`, children: [
+          /* @__PURE__ */ jsx("button", { type: "button", className: "aw-drag", draggable: true, "aria-label": "拖动排序规则", title: "拖动排序，也可使用上移、下移", onDragStart: () => setDragging({ field: rule2.field }), onDragEnd: () => setDragging(null), children: "⠿ 拖动规则" }),
+          /* @__PURE__ */ jsxs("div", { style: { display: "flex", gap: 8, flexWrap: "wrap" }, children: [
+            /* @__PURE__ */ jsx(Button, { disabled: index === 0, onClick: () => save(moved(rules, index, -1)), children: "规则上移" }),
+            /* @__PURE__ */ jsx(Button, { disabled: index === rules.length - 1, onClick: () => save(moved(rules, index, 1)), children: "规则下移" }),
+            /* @__PURE__ */ jsx(Button, { onClick: () => save(rules.filter((_, i) => i !== index)), children: "移除规则" })
+          ] }),
+          rule2.values.map((value, i) => {
+            var _a, _b;
+            return /* @__PURE__ */ jsxs(
+              RemovalContext,
+              {
+                title: ((_a = choices2(rule2.field).find((c) => c.value === value)) == null ? void 0 : _a.label) ?? value,
+                label: "移除此优先值",
+                detail: "从本规则中移除此优先值。",
+                onRemove: () => change(index, { ...rule2, values: rule2.values.filter((v) => v !== value) }),
+                style: { display: "flex", alignItems: "center", gap: 8, padding: 8, marginTop: 8, border: "1px solid var(--border-subtle)", borderRadius: 6 },
+                children: [
+                  /* @__PURE__ */ jsx("button", { type: "button", className: "aw-drag", draggable: true, "aria-label": "拖动优先值", onDragStart: (e) => {
+                    e.stopPropagation();
+                    setDragging({ field: rule2.field, value });
+                  }, onDragEnd: () => setDragging(null), onDragOver: (e) => e.preventDefault(), onDrop: (e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    if ((dragging == null ? void 0 : dragging.field) !== rule2.field || !dragging.value) return;
+                    const next = [...rule2.values];
+                    const from = next.indexOf(dragging.value);
+                    if (from < 0) return;
+                    next.splice(i, 0, next.splice(from, 1)[0]);
+                    change(index, { ...rule2, values: next });
+                    setDragging(null);
+                  }, children: "⠿" }),
+                  /* @__PURE__ */ jsxs("span", { style: { flex: 1, overflowWrap: "anywhere" }, children: [
+                    i + 1,
+                    ". ",
+                    ((_b = choices2(rule2.field).find((c) => c.value === value)) == null ? void 0 : _b.label) ?? `已移除或未知：${value}`
+                  ] }),
+                  /* @__PURE__ */ jsx(Button, { disabled: i === 0, onClick: () => change(index, { ...rule2, values: moved(rule2.values, i, -1) }), children: "上移" }),
+                  /* @__PURE__ */ jsx(Button, { disabled: i === rule2.values.length - 1, onClick: () => change(index, { ...rule2, values: moved(rule2.values, i, 1) }), children: "下移" }),
+                  /* @__PURE__ */ jsx(Button, { onClick: () => change(index, { ...rule2, values: rule2.values.filter((v) => v !== value) }), children: "移除" })
+                ]
+              },
+              value
+            );
+          }),
+          /* @__PURE__ */ jsx(FieldRow, { label: "添加优先值", children: /* @__PURE__ */ jsx(
+            Select,
+            {
+              value: "",
+              placeholder: "选择要优先的值",
+              options: choices2(rule2.field).filter((c) => !rule2.values.includes(c.value)),
+              onChange: (value) => {
+                if (value) change(index, { ...rule2, values: [...rule2.values, value] });
+              }
+            }
+          ) }),
+          /* @__PURE__ */ jsx("p", { style: note$2, children: "未列出的值并列靠后，再比较下一条规则。阶段按编号匹配；不同成就的同编号阶段属于同一优先值。" })
+        ] }) })
+      },
+      rule2.field
+    )),
+    rules.length < 3 && /* @__PURE__ */ jsx(FieldRow, { label: "添加排序规则", children: /* @__PURE__ */ jsx(
+      Select,
+      {
+        value: "",
+        placeholder: "选择成就属性",
+        options: Object.keys(SORT_LABELS).filter((field) => !rules.some((r) => r.field === field)).map((field) => ({ value: field, label: SORT_LABELS[field] })),
+        onChange: (field) => {
+          if (Object.prototype.hasOwnProperty.call(SORT_LABELS, field)) save([...rules, { field, values: [] }]);
+        }
+      }
+    ) })
+  ] });
+}
+function DurationRatio() {
+  const [value, setValue] = useSetting("main.notificationDurationPercent");
+  const d = useDraft(String(value ?? 67), (raw) => setValue(Number(raw)), (raw) => Number(raw) >= 10 && Number(raw) <= 100 ? "" : "请输入 10—100。", "notification-percent");
+  return /* @__PURE__ */ jsxs(Fragment, { children: [
+    /* @__PURE__ */ jsx(FieldRow, { label: "停留时长为原来的", children: /* @__PURE__ */ jsxs("div", { onBlur: d.commit, children: [
+      /* @__PURE__ */ jsx(NumberSlider, { ariaLabel: "连续浮现停留时长比例", value: Number(d.value), min: 10, max: 100, step: 1, unit: "%", onChange: (v) => d.edit(String(v)) }),
+      /* @__PURE__ */ jsx(DraftFeedback, { ...d })
+    ] }) }),
+    /* @__PURE__ */ jsxs("p", { style: note$2, children: [
+      "本批超过一个成就才应用，包括第一条。原来 3 秒 → 约 ",
+      (3 * (value ?? 67) / 100).toFixed(2),
+      " 秒；每条按自身原时长换算，进场、退场动画不变。100% 为原时长。"
+    ] })
+  ] });
+}
+function NotificationSettings() {
+  return /* @__PURE__ */ jsxs(Section, { title: "批次与播放规则", collapsible: true, defaultOpen: false, description: "收集结束后，按本批规则连续或合并播放。", children: [
+    /* @__PURE__ */ jsx(SettingField, { name: "main.notifications" }),
+    /* @__PURE__ */ jsx(SettingField, { name: "main.notificationMode" }),
+    /* @__PURE__ */ jsx(SettingField, { name: "main.allowNotificationModeSwitch" }),
+    /* @__PURE__ */ jsx("p", { style: note$2, children: "自制设置页的按钮可调用“浮现方式 → 切换到另一种方式”；按钮文字可绑定当前方式名称。关闭玩家切换后只用创作者默认值。" }),
+    /* @__PURE__ */ jsx(SettingField, { name: "main.notificationWindowMs" }),
+    /* @__PURE__ */ jsx(Section, { title: "连续浮现规则", collapsible: true, defaultOpen: false, children: /* @__PURE__ */ jsx(DurationRatio, {}) }),
+    /* @__PURE__ */ jsx(NotificationOrdering, {})
+  ] });
+}
+function SummarySettings() {
+  return /* @__PURE__ */ jsxs(Section, { title: "合并浮现", collapsible: true, defaultOpen: false, description: "本批两个以上成就使用汇总界面，只有一个时使用该阶段原浮现。", children: [
+    /* @__PURE__ */ jsx(SettingField, { name: "main.summaryUI" }),
+    /* @__PURE__ */ jsx(SettingField, { name: "main.summaryDurationMs" }),
+    /* @__PURE__ */ jsx("p", { style: note$2, children: "在官方界面编辑器编排汇总文字和动画。默认文字为“解锁了 N 个成就”，N 统计本批不同成就，不额外判断解锁状态。" })
+  ] });
+}
 function ElementCssEditor({ owner, inheritedOwners = [], appearance, surface }) {
-  return /* @__PURE__ */ jsx(Section, { title: "元素进阶 CSS", collapsible: true, defaultOpen: false, description: "普通配置打底，CSS 覆盖同名样式；只影响当前元素，切换阶段自动清理。", children: /* @__PURE__ */ jsx(CssEditor, { owner, inheritedOwners, appearance, fixedSurface: surface }, cssOwnerKey(owner)) });
+  return /* @__PURE__ */ jsx(EditorScope, { id: "css:" + cssOwnerKey(owner), children: /* @__PURE__ */ jsx(Section, { title: "元素 CSS", description: "普通配置打底，CSS 覆盖同名样式；只影响当前元素。", children: /* @__PURE__ */ jsx(CssEditor, { owner, inheritedOwners, appearance, fixedSurface: surface }) }) });
 }
 function CssEditor({ owner, inheritedOwners, appearance, fixedSurface }) {
+  const [stored] = useSetting("main.elementCss");
+  const [target, setTarget] = useEditorState("target", "background"), [elementId, setElementId] = useEditorState("new-element", "");
+  const [surface, setSurface] = useEditorState("surface", fixedSurface ?? "both");
+  const savedTargets = [...new Set((stored ?? []).filter((r) => sameOwner(r, owner)).map((r) => r.target))];
+  const targets = [...Object.entries(CSS_TARGETS).map(([id2, name]) => ({ id: id2, name })), ...savedTargets.filter((t) => t.startsWith("element:")).map((id2) => ({ id: id2, name: "自建元素 " + id2.slice(8) }))];
+  return /* @__PURE__ */ jsxs(Fragment, { children: [
+    /* @__PURE__ */ jsxs("p", { className: "aw-note", children: [
+      "所属：",
+      owner.ownerKind,
+      " / ",
+      owner.achievementId ? owner.achievementId + " / " : "",
+      owner.ownerId,
+      " · ",
+      surface === "card" ? "卡片" : surface === "popup" ? "浮现" : "两处共用"
+    ] }),
+    !fixedSurface && /* @__PURE__ */ jsx(FieldRow, { label: "使用位置", children: /* @__PURE__ */ jsx(Select, { value: surface, options: [{ value: "both", label: "两处共用" }, { value: "card", label: "卡片" }, { value: "popup", label: "浮现" }], onChange: (v) => setSurface(v) }) }),
+    /* @__PURE__ */ jsxs("div", { className: "aw-css-grid", children: [
+      /* @__PURE__ */ jsxs("div", { className: "aw-list", children: [
+        targets.map((t) => /* @__PURE__ */ jsxs("button", { className: "aw-object", "aria-current": target === t.id ? "true" : void 0, onClick: () => setTarget(t.id), children: [
+          t.name,
+          savedTargets.includes(t.id) ? " · 已配置" : ""
+        ] }, t.id)),
+        /* @__PURE__ */ jsx("input", { className: "aw-input", "aria-label": "自建元素编号", placeholder: "官方元素编号", value: elementId, onChange: (e) => setElementId(e.target.value) }),
+        /* @__PURE__ */ jsx(Button, { disabled: !elementId.trim(), onClick: () => setTarget("element:" + elementId.trim()), children: "配置自建元素" })
+      ] }),
+      /* @__PURE__ */ jsx(EditorScope, { id: target + "/" + surface, children: /* @__PURE__ */ jsx(CssField, { owner, inheritedOwners, appearance, surface, target }) }, target + surface)
+    ] })
+  ] });
+}
+function CssField({ owner, inheritedOwners, appearance, surface, target }) {
   const [stored, setRows] = useSetting("main.elementCss");
   const rows2 = stored ?? [];
-  const [target, setTarget] = useState("background");
-  const [elementId, setElementId] = useState("");
-  const [surface, setSurface] = useState(fixedSurface ?? "both");
-  const selectedTarget = target === "custom" ? `element:${elementId.trim()}` : target;
-  const row = rows2.find((r) => sameOwner(r, owner) && r.target === selectedTarget && r.surface === surface);
-  const [draft, setDraft] = useState((row == null ? void 0 : row.css) ?? "");
-  const [replace, setReplace] = useState((row == null ? void 0 : row.replace) ?? false);
-  const [message, setMessage] = useState("");
-  const [error, setError] = useState("");
-  useEffect(() => {
-    setDraft((row == null ? void 0 : row.css) ?? "");
-    setReplace((row == null ? void 0 : row.replace) ?? false);
-    setMessage("");
-    setError("");
-  }, [selectedTarget, surface, row == null ? void 0 : row.css, row == null ? void 0 : row.replace]);
-  const savedTargets = [...new Set(rows2.filter((r) => sameOwner(r, owner)).map((r) => r.target))];
-  const save = (remove = false) => {
+  const row = rows2.find((r) => sameOwner(r, owner) && r.target === target && r.surface === surface);
+  const remaining = rows2.filter((r) => !(sameOwner(r, owner) && r.target === target && r.surface === surface));
+  const record = (raw) => ({ ...owner, id: (row == null ? void 0 : row.id) ?? "css_" + crypto.randomUUID(), target, surface, ...JSON.parse(raw) });
+  const d = useDraft(JSON.stringify({ css: (row == null ? void 0 : row.css) ?? "", replace: (row == null ? void 0 : row.replace) ?? false }), (raw) => setRows([...remaining, record(raw)]), (raw) => {
     try {
-      const remaining = rows2.filter((r) => !(sameOwner(r, owner) && r.target === selectedTarget && r.surface === surface));
-      const next = remove ? remaining : [...remaining, { ...owner, id: (row == null ? void 0 : row.id) ?? "css_" + crypto.randomUUID(), target: selectedTarget, surface, css: draft, replace }];
-      parseCssRecords(next);
-      if (!setRows(next)) throw Error("保存失败，请检查配置。");
-      setError("");
-      setMessage(remove ? "已恢复继承。" : "CSS 已应用。");
-      return true;
+      parseCssRecords([...remaining, record(raw)]);
+      return "";
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-      return false;
+      return String(e);
     }
-  };
-  const inherited = resolveElementCss(rows2.filter((r) => !(sameOwner(r, owner) && r.surface === surface)), [...inheritedOwners, ...fixedSurface ? [owner] : []]).filter((r) => r.target === selectedTarget && (surface === "both" || r.surface === surface));
+  }, "code");
+  const draft = JSON.parse(d.value);
+  const inherited = resolveElementCss(remaining, [...inheritedOwners, owner]).filter((r) => r.target === target && (surface === "both" || r.surface === surface));
   let props = /* @__PURE__ */ new Set();
   try {
-    parseElementCss(draft);
-    props = cssProperties([...replace ? [] : inherited.map((r) => r.css), draft]);
+    parseElementCss(draft.css);
+    props = cssProperties([...draft.replace ? [] : inherited.map((r) => r.css), draft.css]);
   } catch {
   }
-  const effect = selectedTarget === "icon" ? appearance == null ? void 0 : appearance.iconEffect : selectedTarget === "frame" ? appearance == null ? void 0 : appearance.frameEffect : void 0;
-  const conflict = effect && cssStopsEffect(props, effect);
-  const dirty = draft !== ((row == null ? void 0 : row.css) ?? "") || replace !== ((row == null ? void 0 : row.replace) ?? false);
-  return /* @__PURE__ */ jsxs(Fragment, { children: [
-    /* @__PURE__ */ jsx(FieldRow, { label: "配置元素", children: /* @__PURE__ */ jsx(
-      Select$1,
-      {
-        value: target,
-        options: [...Object.entries(CSS_TARGETS).map(([value, label]) => ({ value, label })), ...savedTargets.filter((t) => t.startsWith("element:")).map((value) => ({ value, label: `自建元素 ${value.slice(8)}` })), { value: "custom", label: "添加自建元素（按编号）" }],
-        onChange: (value) => {
-          if (dirty && !save()) return;
-          setTarget(value);
-        }
-      }
-    ) }),
-    target === "custom" && /* @__PURE__ */ jsx(FieldRow, { label: "元素编号", description: "填写官方源码中的元素 id；卡片使用模板直属基础元素，浮现元素还需在官方编辑器填写唯一标识符。", children: /* @__PURE__ */ jsx(TextInput, { value: elementId, onChange: (value) => {
-      if (dirty && !save()) return;
-      setElementId(value);
-    }, placeholder: "例如 image-… 或 rect-…" }) }),
-    !fixedSurface && /* @__PURE__ */ jsx(FieldRow, { label: "使用位置", children: /* @__PURE__ */ jsx(
-      Select$1,
-      {
-        value: surface,
-        options: [{ value: "both", label: "卡片与浮现共用" }, { value: "card", label: "仅卡片" }, { value: "popup", label: "仅浮现" }],
-        onChange: (value) => {
-          if (dirty && !save()) return;
-          setSurface(value);
-        }
-      }
-    ) }),
-    savedTargets.length > 0 && /* @__PURE__ */ jsxs("p", { style: note$2, children: [
-      "本处已配置：",
-      savedTargets.map((t) => CSS_TARGETS[t] ?? t).join("、")
+  const effect = target === "icon" ? appearance == null ? void 0 : appearance.iconEffect : target === "frame" ? appearance == null ? void 0 : appearance.frameEffect : void 0;
+  const remove = () => {
+    if (setRows(remaining)) d.useLatest();
+  };
+  return /* @__PURE__ */ jsxs(RemovalContext, { title: "元素 CSS：" + target, label: "移除此处 CSS", detail: "只移除此元素当前使用位置的 CSS，保留界面元素与其他位置。", reason: row ? "" : "当前元素没有本地 CSS。", onRemove: remove, children: [
+    /* @__PURE__ */ jsx("h3", { children: CSS_TARGETS[target] ?? target }),
+    /* @__PURE__ */ jsxs("p", { className: "aw-note", children: [
+      row ? "已单独配置" : "沿用上级",
+      " · ",
+      inherited.length ? "存在继承的 CSS" : "没有上级 CSS"
     ] }),
-    /* @__PURE__ */ jsx(FieldRow, { label: "替换此元素的上级 CSS", description: "关闭时补充共用样式；开启并留空可停用继承的 CSS。普通配置仍保留。", children: /* @__PURE__ */ jsx(Switch, { checked: replace, onChange: setReplace }) }),
-    /* @__PURE__ */ jsx(
-      "textarea",
-      {
-        "aria-label": "元素 CSS",
-        spellCheck: false,
-        value: draft,
-        onChange: (e) => {
-          setDraft(e.target.value);
-          setMessage("");
-        },
-        placeholder: "border-radius: 20px;\nbox-shadow: 0 4px 16px currentColor;",
-        style: { width: "100%", minHeight: 160, padding: 12, fontFamily: "monospace", color: "var(--fg-primary)", background: "var(--bg-sunken)", border: "1px solid var(--border-default)", borderRadius: 6 }
-      }
-    ),
-    /* @__PURE__ */ jsxs("p", { style: note$2, children: [
-      "直接填写属性；状态可写 &:hover ",
-      "{ … }",
-      "，动画可用 @keyframes。无需 !important。不支持全局选择器、@import、嵌套规则或外部图片地址；工程图片用素材选择器。"
-    ] }),
-    props.size > 0 && /* @__PURE__ */ jsxs("p", { style: note$2, children: [
-      "由 CSS 管理：",
+    /* @__PURE__ */ jsx(FieldRow, { label: "替换上级 CSS", description: "开启并留空可停用继承 CSS，普通配置仍保留。", children: /* @__PURE__ */ jsx(Switch, { checked: draft.replace, onChange: (replace) => {
+      d.edit(JSON.stringify({ ...draft, replace }));
+      d.commit();
+    } }) }),
+    /* @__PURE__ */ jsx("textarea", { className: "aw-input aw-css-code", "aria-label": "元素 CSS", spellCheck: false, value: draft.css, onChange: (e) => d.edit(JSON.stringify({ ...draft, css: e.target.value })), onBlur: d.commit, placeholder: "border-radius: 20px;" }),
+    /* @__PURE__ */ jsx(DraftFeedback, { ...d }),
+    /* @__PURE__ */ jsx("p", { className: "aw-note", children: "停止输入 0.5 秒后提交。支持属性、&:hover 与 @keyframes；不支持全局选择器、@import、外部图片地址。自建元素使用官方元素编号。" }),
+    !!props.size && /* @__PURE__ */ jsxs("p", { className: "aw-note", children: [
+      "CSS 管理：",
       [...props].join("、"),
-      "。对应普通设置保留原值；移除此覆盖后恢复。"
+      "。"
     ] }),
-    conflict && /* @__PURE__ */ jsx("p", { style: { ...note$2, color: "var(--warn)" }, children: "CSS 接管了动效相关属性，此元素的内置附加动效暂停。" }),
-    /* @__PURE__ */ jsxs("div", { style: { display: "flex", gap: 8 }, children: [
-      /* @__PURE__ */ jsx(Button, { onClick: () => save(), children: "应用 CSS" }),
-      /* @__PURE__ */ jsx(Button, { disabled: !row, onClick: () => save(true), children: "恢复继承" })
-    ] }),
-    inherited.length > 0 && /* @__PURE__ */ jsxs("details", { children: [
-      /* @__PURE__ */ jsx("summary", { children: "查看继承的 CSS" }),
-      /* @__PURE__ */ jsx("pre", { style: { ...note$2, whiteSpace: "pre-wrap" }, children: [...new Set(inherited.map((r) => r.css))].join("\n") })
-    ] }),
-    error && /* @__PURE__ */ jsx("p", { role: "alert", style: { color: "var(--warn)" }, children: error }),
-    message && /* @__PURE__ */ jsx("p", { role: "status", style: note$2, children: message })
+    effect && cssStopsEffect(props, effect) && /* @__PURE__ */ jsx("p", { className: "aw-note", children: "CSS 接管动效属性，此元素的内置附加动效暂停。" }),
+    /* @__PURE__ */ jsx(Button, { disabled: !row, onClick: remove, children: "恢复此元素继承" }),
+    !!inherited.length && /* @__PURE__ */ jsxs("details", { children: [
+      /* @__PURE__ */ jsx("summary", { children: "查看上级 CSS" }),
+      /* @__PURE__ */ jsx("pre", { children: [...new Set(inherited.map((r) => r.css))].join("\n") })
+    ] })
   ] });
 }
 const note$1 = { color: "var(--fg-secondary)", fontSize: "0.9em" };
 const choices = (presets, surface) => presets.filter((p) => !p.surface || p.surface === surface).map((p) => ({ value: p.id, label: p.name }));
 function SharedPresentationEditor({ surface }) {
+  const [groups] = useSetting("main.groupCatalog");
   const [stored, setStored] = useSetting("main.appearances");
   const [levels] = useSetting("main.levels");
   const [defaults] = useSetting("main.defaultStages");
@@ -4788,37 +6416,69 @@ function SharedPresentationEditor({ surface }) {
   const [globalUI] = useSetting("main.popup");
   const [globalDuration] = useSetting("main.durationMs");
   const presets = stored ?? [], available = presets.filter((p) => p.surface === surface);
-  const [selected, select] = useState("");
+  const [selected, select] = useSelection("appearance:" + surface);
   const [error, setError] = useState("");
   const current = available.find((p) => p.id === selected) ?? available[0];
   const fallback = available.find((p) => p.isDefault);
-  const used = !!current && (current.isDefault || appearanceInUse(current.id, levels ?? [], [...defaults ?? [], ...stages ?? [], ...(presentations ?? []).filter((p) => p.mode === "custom")]));
+  const removalReason = (id2) => {
+    const value = available.find((p) => p.id === id2);
+    if (!value) return "此方案已不存在。";
+    return (groups == null ? void 0 : groups.some((row) => row.card === id2 || row.popup === id2)) || value.isDefault || appearanceInUse(id2, levels ?? [], [...defaults ?? [], ...stages ?? [], ...(presentations ?? []).filter((p) => p.mode === "custom")]) ? "先更换默认方案或解除等级、阶段引用。" : "";
+  };
+  const used = !!current && !!removalReason(current.id);
   const save = (next) => {
     const ok = setStored(next);
     setError(ok ? "" : "方案保存失败，请检查内容。");
     return ok;
   };
   const patch = (v) => save(presets.map((p) => p.id === current.id ? { ...p, ...v } : p));
-  const remove = () => {
-    if (!current || used) return;
-    const owner = { ownerKind: "appearance", ownerId: current.id, achievementId: "" };
+  const remove = (id2) => {
+    if (removalReason(id2)) return;
+    const owner = { ownerKind: "appearance", ownerId: id2, achievementId: "" };
     const nextCss = (css ?? []).filter((row) => !sameOwner(row, owner));
-    if (!save(presets.filter((p) => p.id !== current.id))) return;
+    if (!save(presets.filter((p) => p.id !== id2))) return;
     if (nextCss.length !== (css ?? []).length && !setCss(nextCss)) {
       const restored = setStored(presets);
       setError(restored ? "专属 CSS 清理失败，已恢复方案，请重试。" : "方案已移除，但专属 CSS 清理失败且方案未能恢复；请撤销本次删除。");
     }
   };
+  const add = () => {
+    const p = {
+      id: "look_" + crypto.randomUUID(),
+      name: surface === "card" ? "新卡片方案" : "新浮现方案",
+      surface,
+      isDefault: available.length === 0,
+      nameMode: "stage",
+      descriptionMode: "stage",
+      iconMode: "stage",
+      levelVisibility: "stage",
+      stageNameVisibility: "stage",
+      durationMs: surface === "popup" ? 3e3 : 0,
+      ui: surface === "popup" ? "ui:@mixing-entropy.achievement/achievement-popup" : ""
+    };
+    if (save([...presets, p])) select(p.id);
+  };
+  const special = selected.startsWith("$") || !current && !selected;
   return /* @__PURE__ */ jsxs(
-    Section,
+    Workspace,
     {
-      title: surface === "card" ? "通用卡片展示" : "通用浮现",
-      collapsible: true,
-      defaultOpen: false,
-      description: "保存可复用的表现方案；阶段默认沿用本组默认方案，也可选择其他方案或单独调整。具体文字和图标读取当前阶段。",
+      list: /* @__PURE__ */ jsx(
+        ObjectList,
+        {
+          title: surface === "card" ? "卡片方案" : "浮现方案",
+          items: available,
+          selected: special ? "" : (current == null ? void 0 : current.id) ?? "",
+          onSelect: select,
+          onRemove: remove,
+          removalReason,
+          actions: /* @__PURE__ */ jsx(Button, { onClick: add, children: "＋ 添加方案" }),
+          extra: /* @__PURE__ */ jsx("div", { className: "aw-list", children: (surface === "card" ? [{ id: "$template", name: "模板与尺寸" }] : [{ id: "$rules", name: "播放规则" }, { id: "$summary", name: "合并汇总" }]).map((i) => /* @__PURE__ */ jsx("button", { className: "aw-object", "aria-current": selected === i.id ? "true" : void 0, onClick: () => select(i.id), children: i.name }, i.id)) })
+        }
+      ),
+      preview: !special && current && /* @__PURE__ */ jsx(ContentPreview, { surface, scheme: current }),
       children: [
         /* @__PURE__ */ jsx(FieldRow, { label: "默认方案", children: /* @__PURE__ */ jsx(
-          Select$1,
+          Select,
           {
             value: (fallback == null ? void 0 : fallback.id) ?? "",
             options: [{ value: "", label: "使用官方界面原样" }, ...choices(available, surface)],
@@ -4830,105 +6490,123 @@ function SharedPresentationEditor({ surface }) {
           /* @__PURE__ */ jsx(SettingField, { name: "main.popup" }),
           /* @__PURE__ */ jsx(SettingField, { name: "main.durationMs" })
         ] }),
-        surface === "card" && /* @__PURE__ */ jsx("p", { style: note$1, children: "卡片排版使用成就页的官方列表模板；双击列表编辑。方案不复制卡片画布。" }),
-        /* @__PURE__ */ jsx(Button, { onClick: () => {
-          const p = {
-            id: "look_" + crypto.randomUUID(),
-            name: surface === "card" ? "新卡片方案" : "新浮现方案",
-            surface,
-            isDefault: available.length === 0,
-            nameMode: "stage",
-            descriptionMode: "stage",
-            iconMode: "stage",
-            levelVisibility: "stage",
-            stageNameVisibility: "stage",
-            durationMs: surface === "popup" ? 3e3 : 0,
-            ui: surface === "popup" ? "ui:@mixing-entropy.achievement/achievement-popup" : ""
-          };
-          if (save([...presets, p])) select(p.id);
-        }, children: "添加方案" }),
-        current ? /* @__PURE__ */ jsxs(Fragment, { children: [
-          /* @__PURE__ */ jsx(FieldRow, { label: "编辑方案", children: /* @__PURE__ */ jsx(Select$1, { value: current.id, options: choices(available, surface), onChange: select }) }),
-          /* @__PURE__ */ jsx(FieldRow, { label: "方案名称", children: /* @__PURE__ */ jsx(TextInput, { value: current.name, onChange: (name) => patch({ name }) }) }),
+        surface === "card" && /* @__PURE__ */ jsx("p", { style: note$1, children: "卡片排版：在官方编辑器打开成就页，双击列表进入卡片模板。" }),
+        special ? surface === "card" ? /* @__PURE__ */ jsx(CardLayoutEditor, {}) : selected === "$summary" ? /* @__PURE__ */ jsx(SummarySettings, {}) : /* @__PURE__ */ jsx(NotificationSettings, {}) : /* @__PURE__ */ jsx(EditorScope, { id: "scheme:" + (current == null ? void 0 : current.id), children: current ? /* @__PURE__ */ jsxs(Fragment, { children: [
+          /* @__PURE__ */ jsx("h2", { children: current.name }),
+          /* @__PURE__ */ jsxs("p", { className: "aw-note", children: [
+            current.id,
+            " · ",
+            current.isDefault ? "本组默认方案" : "可复用方案"
+          ] }),
+          /* @__PURE__ */ jsx(FieldRow, { label: "方案名称", children: /* @__PURE__ */ jsx(TextInput, { required: true, value: current.name, onChange: (name) => patch({ name }) }) }),
           /* @__PURE__ */ jsxs(Section, { title: "内容显示方式", collapsible: true, defaultOpen: false, description: "只决定是否显示；名称、说明和图标始终读取当前阶段，不在这里填写某个成就的内容。", children: [
-            ["nameMode", "descriptionMode", "iconMode"].map((key, n) => /* @__PURE__ */ jsx(FieldRow, { label: ["名称", "说明", "图标"][n], children: /* @__PURE__ */ jsx(Select$1, { value: current[key] ?? "stage", options: [{ value: "stage", label: "使用当前阶段内容" }, { value: "none", label: "不显示" }, ...key === "iconMode" ? [{ value: "unknown", label: "默认未知图标" }] : []], onChange: (value) => patch({ [key]: value }) }) }, key)),
-            ["levelVisibility", "stageNameVisibility"].map((key, n) => /* @__PURE__ */ jsx(FieldRow, { label: ["等级", "阶段名称"][n], children: /* @__PURE__ */ jsx(Select$1, { value: current[key] ?? "stage", options: [{ value: "stage", label: "沿用阶段设置" }, { value: "show", label: "显示" }, { value: "hide", label: "不显示" }], onChange: (value) => patch({ [key]: value }) }) }, key))
+            ["nameMode", "descriptionMode", "iconMode"].map((key, n) => /* @__PURE__ */ jsx(FieldRow, { label: ["名称", "说明", "图标"][n], children: /* @__PURE__ */ jsx(Select, { value: current[key] ?? "stage", options: [{ value: "stage", label: "使用当前阶段内容" }, { value: "none", label: "不显示" }, ...key === "iconMode" ? [{ value: "unknown", label: "默认未知图标" }] : []], onChange: (value) => patch({ [key]: value }) }) }, key)),
+            ["levelVisibility", "stageNameVisibility"].map((key, n) => /* @__PURE__ */ jsx(FieldRow, { label: ["等级", "阶段名称"][n], children: /* @__PURE__ */ jsx(Select, { value: current[key] ?? "stage", options: [{ value: "stage", label: "沿用阶段设置" }, { value: "show", label: "显示" }, { value: "hide", label: "不显示" }], onChange: (value) => patch({ [key]: value }) }) }, key))
           ] }),
           surface === "popup" && /* @__PURE__ */ jsxs(Section, { title: "界面与时长", collapsible: true, defaultOpen: false, children: [
             /* @__PURE__ */ jsx(FieldRow, { label: "浮现界面", children: /* @__PURE__ */ jsx(UIRefPicker, { value: (current.ui || globalUI || "ui:@mixing-entropy.achievement/achievement-popup").replace(/^ui:@?/, ""), onChange: (ui) => patch({ ui: ui ? "ui:@" + (ui.includes("/") ? ui : "mixing-entropy.achievement/" + ui) : "" }) }) }),
-            /* @__PURE__ */ jsx(FieldRow, { label: "时长（毫秒）", children: /* @__PURE__ */ jsx(NumberSlider, { ariaLabel: "通用浮现时长", value: current.durationMs || globalDuration || 3e3, min: 300, max: 6e4, step: 100, unit: "ms", onChange: (durationMs) => patch({ durationMs }) }) })
+            /* @__PURE__ */ jsx(FieldRow, { label: "时长（毫秒）", children: /* @__PURE__ */ jsx(Numeric, { ariaLabel: "通用浮现时长", value: current.durationMs || globalDuration || 3e3, min: 300, max: 6e4, step: 100, onChange: (durationMs) => patch({ durationMs }) }) })
           ] }),
           /* @__PURE__ */ jsx(CardAppearanceEditor, { value: current, patch }),
           /* @__PURE__ */ jsx(ElementCssEditor, { owner: { ownerKind: "appearance", ownerId: current.id, achievementId: "" }, appearance: current, surface }, current.id),
-          /* @__PURE__ */ jsx(Button, { disabled: used, title: used ? "先更换默认方案或解除等级、阶段引用" : void 0, onClick: remove, children: "删除此方案" }),
+          /* @__PURE__ */ jsx(Button, { disabled: used, title: used ? "先更换默认方案或解除等级、阶段引用" : void 0, onClick: () => remove(current.id), children: "删除此方案" }),
           used && /* @__PURE__ */ jsx("p", { style: note$1, children: "默认方案或仍被引用的方案不能直接删除。" })
-        ] }) : /* @__PURE__ */ jsx("p", { style: note$1, children: "尚无方案，默认保留官方界面原样。" }),
+        ] }) : /* @__PURE__ */ jsx("p", { style: note$1, children: "尚无方案，默认保留官方界面原样。" }) }, current == null ? void 0 : current.id),
         error && /* @__PURE__ */ jsx("p", { role: "alert", children: error })
       ]
     }
   );
 }
 function LevelAppearanceEditor() {
+  const [groups] = useSetting("main.groupCatalog");
   const [stored, setLevels] = useSetting("main.levels");
   const [presets] = useSetting("main.appearances");
   const [items] = useSetting("main.achievements");
   const [defaults] = useSetting("main.defaultStages");
   const [stages] = useSetting("main.displayStages");
   const levels = (stored == null ? void 0 : stored.length) ? stored : DEFAULT_LEVELS;
-  const [selected, select] = useState("");
+  const [selected, select] = useSelection("level");
   const [error, setError] = useState("");
   const current = levels.find((l) => l.id === selected) ?? levels[0];
-  const used = (items == null ? void 0 : items.some((a) => a.levelId === current.id)) || [...defaults ?? [], ...stages ?? []].some((s) => s.levelMode === "custom" && s.levelId === current.id);
+  const removalReason = (id2) => !levels.some((l) => l.id === id2) ? "此等级已不存在。" : levels.length <= 1 ? "至少保留一个等级。" : (groups == null ? void 0 : groups.some((row) => row.level === id2)) || (items == null ? void 0 : items.some((a) => a.levelId === id2)) || [...defaults ?? [], ...stages ?? []].some((s) => s.levelMode === "custom" && s.levelId === id2) ? "此等级仍被成就或阶段引用，请先解除引用。" : "";
   const save = (next) => {
     const ok = setLevels(next);
     setError(ok ? "" : "等级保存失败");
     return ok;
   };
-  return /* @__PURE__ */ jsxs(Fragment, { children: [
-    /* @__PURE__ */ jsx(FieldRow, { label: "等级", children: /* @__PURE__ */ jsx(Select$1, { value: current.id, options: levels.map((l) => ({ value: l.id, label: l.name })), onChange: select }) }),
-    /* @__PURE__ */ jsx(FieldRow, { label: "等级名称", children: /* @__PURE__ */ jsx(TextInput, { value: current.name, onChange: (name) => save(levels.map((l) => l.id === current.id ? { ...l, name } : l)) }) }),
-    ["card", "popup"].map((surface) => /* @__PURE__ */ jsx(FieldRow, { label: surface === "card" ? "通用卡片方案" : "通用浮现方案", children: /* @__PURE__ */ jsx(
-      Select$1,
-      {
-        value: (surface === "popup" ? current.popupAppearanceId : current.appearanceId) ?? "",
-        options: [{ value: "", label: "未关联" }, ...choices(presets ?? [], surface)],
-        onChange: (id2) => save(levels.map((l) => l.id === current.id ? { ...l, [surface === "card" ? "appearanceId" : "popupAppearanceId"]: id2 } : l))
-      }
-    ) }, surface)),
-    /* @__PURE__ */ jsx("p", { style: note$1, children: "仅阶段选择“跟随本阶段等级”时使用这些关联，不自动改变阶段。" }),
-    /* @__PURE__ */ jsx(Button, { onClick: () => {
-      const l = { id: "level_" + crypto.randomUUID(), name: "新等级" };
-      if (save([...levels, l])) select(l.id);
-    }, children: "添加等级" }),
-    /* @__PURE__ */ jsx(Button, { disabled: used || levels.length <= 1, onClick: () => save(levels.filter((l) => l.id !== current.id)), children: "删除此等级" }),
+  const remove = (id2) => {
+    if (!removalReason(id2)) save(levels.filter((l) => l.id !== id2));
+  };
+  const nav = useNavigation();
+  const references = (items ?? []).filter((a) => a.levelId === current.id || resolveStages(a.id, defaults, stages).some((s) => s.levelMode === "custom" && s.levelId === current.id));
+  const sharedReferences = (defaults ?? []).filter((s) => s.levelMode === "custom" && s.levelId === current.id);
+  return /* @__PURE__ */ jsxs(Workspace, { list: /* @__PURE__ */ jsx(ObjectList, { title: "等级", items: levels, selected: current.id, onSelect: select, onRemove: remove, removalReason, actions: /* @__PURE__ */ jsx(Button, { onClick: () => {
+    const l = { id: "level_" + crypto.randomUUID(), name: "新等级" };
+    if (save([...levels, l])) select(l.id);
+  }, children: "＋ 添加等级" }) }), children: [
+    /* @__PURE__ */ jsxs(EditorScope, { id: "level:" + current.id, children: [
+      /* @__PURE__ */ jsx("h2", { children: current.name }),
+      /* @__PURE__ */ jsx("p", { className: "aw-note", children: current.id }),
+      /* @__PURE__ */ jsx(FieldRow, { label: "等级名称", children: /* @__PURE__ */ jsx(TextInput, { required: true, value: current.name, onChange: (name) => save(levels.map((l) => l.id === current.id ? { ...l, name } : l)) }) }),
+      ["card", "popup"].map((surface) => /* @__PURE__ */ jsx(FieldRow, { label: surface === "card" ? "通用卡片方案" : "通用浮现方案", children: /* @__PURE__ */ jsx(
+        Select,
+        {
+          value: (surface === "popup" ? current.popupAppearanceId : current.appearanceId) ?? "",
+          options: [{ value: "", label: "未关联" }, ...choices(presets ?? [], surface)],
+          onChange: (id2) => save(levels.map((l) => l.id === current.id ? { ...l, [surface === "card" ? "appearanceId" : "popupAppearanceId"]: id2 } : l))
+        }
+      ) }, surface)),
+      /* @__PURE__ */ jsx("p", { style: note$1, children: "阶段选用“跟随本阶段等级”时使用这些方案。" }),
+      /* @__PURE__ */ jsx(Button, { disabled: !!removalReason(current.id), title: removalReason(current.id) || void 0, onClick: () => remove(current.id), children: "删除此等级" }),
+      /* @__PURE__ */ jsxs(Section, { title: "引用情况", children: [
+        /* @__PURE__ */ jsxs("p", { className: "aw-note", children: [
+          references.length,
+          " 个成就引用此等级；共用默认阶段引用也受到删除保护。"
+        ] }),
+        /* @__PURE__ */ jsxs("div", { className: "aw-actions", children: [
+          references.map((a) => /* @__PURE__ */ jsx(Button, { onClick: () => nav == null ? void 0 : nav.jump({ area: "achievements", sub: "" }, "achievement", a.id), children: a.name }, a.id)),
+          sharedReferences.map((s) => /* @__PURE__ */ jsxs(Button, { onClick: () => nav == null ? void 0 : nav.jump({ area: "attributes", sub: "defaults" }, "default-stage", s.id), children: [
+            "默认阶段：",
+            s.name
+          ] }, "default:" + s.id))
+        ] })
+      ] })
+    ] }, current.id),
     error && /* @__PURE__ */ jsx("p", { role: "alert", children: error })
   ] });
 }
 function StageAppearanceEditor({ stage, patch, levels, item, surface = "card", presentation }) {
   const [presets] = useSetting("main.appearances");
+  const [groups] = useSetting("main.groupCatalog");
+  const resolved = applyGroupScheme(presentation, groups ?? [], (item == null ? void 0 : item.id) ?? "");
   const source = stage.appearanceSource ?? "default";
   const level = levels.find((l) => l.id === (stage.levelMode === "custom" ? stage.levelId : item == null ? void 0 : item.levelId));
-  const inherited = resolveAppearance(stage, presets ?? [], levelPresetId(level, surface), surface);
-  const scheme = presentationPreset(stage, presets ?? [], levelPresetId(level, surface), surface);
+  const inherited = resolveAppearance(resolved, presets ?? [], levelPresetId(level, surface), surface);
+  const scheme = presentationPreset(resolved, presets ?? [], levelPresetId(level, surface), surface);
   const missing = source === "preset" && !scheme;
-  const owners = presentationCssOwners(presentation, stage, item, levels, presets ?? []);
-  const [editing, setEditing] = useState(source === "local" || !!(stage.overrideBackground || stage.overrideFrame || stage.overrideEffects));
+  const owners = presentationCssOwners(resolved, stage, item, levels, presets ?? []);
+  const [editing, setEditing] = useEditorState("appearance-editing:" + surface, source === "local" || !!(stage.overrideBackground || stage.overrideFrame || stage.overrideEffects));
+  const nav = useNavigation();
   return /* @__PURE__ */ jsxs(Fragment, { children: [
     /* @__PURE__ */ jsx(FieldRow, { label: "表现方案", children: /* @__PURE__ */ jsx(
-      Select$1,
+      Select,
       {
         value: source,
-        options: [{ value: "default", label: "沿用本组默认方案" }, { value: "preset", label: "选择通用方案" }, { value: "level", label: "跟随本阶段等级" }, { value: "local", label: "完全单独配置" }],
+        options: [{ value: "default", label: "沿用成就的默认方案" }, { value: "global", label: "直接沿用通用默认方案" }, { value: "preset", label: "选择通用方案" }, { value: "level", label: "跟随本阶段等级" }, { value: "local", label: "完全单独配置" }],
         onChange: (value) => {
           patch({ appearanceSource: value });
           setEditing(value === "local");
         }
       }
     ) }),
-    source === "preset" && /* @__PURE__ */ jsx(FieldRow, { label: "选择方案", children: /* @__PURE__ */ jsx(Select$1, { value: stage.appearanceId ?? "", options: [{ value: "", label: "请选择方案" }, ...choices(presets ?? [], surface)], onChange: (appearanceId) => patch({ appearanceId }) }) }),
+    source === "preset" && /* @__PURE__ */ jsx(FieldRow, { label: "选择方案", children: /* @__PURE__ */ jsx(Select, { value: stage.appearanceId ?? "", options: [{ value: "", label: "请选择方案" }, ...choices(presets ?? [], surface)], onChange: (appearanceId) => patch({ appearanceId }) }) }),
     /* @__PURE__ */ jsxs("p", { style: note$1, children: [
       source === "local" ? "使用本阶段单独配置。" : `当前沿用：${(scheme == null ? void 0 : scheme.name) ?? "官方界面原样"}。`,
       missing ? "所选方案已失效，请重新选择。" : ""
+    ] }),
+    scheme && /* @__PURE__ */ jsxs(Button, { onClick: () => nav == null ? void 0 : nav.jump({ area: "interfaces", sub: surface === "card" ? "cards" : "popups" }, "appearance:" + surface, scheme.id), children: [
+      "编辑来源方案：",
+      scheme.name
     ] }),
     source !== "local" && /* @__PURE__ */ jsx(Button, { onClick: () => setEditing(!editing), children: editing ? "收起单独调整" : "单独调整外观或 CSS" }),
     (editing || source === "local") && /* @__PURE__ */ jsxs(Section, { title: "外观与元素 CSS", collapsible: true, children: [
@@ -4943,19 +6621,13 @@ function StageAppearanceEditor({ stage, patch, levels, item, surface = "card", p
 }
 const note = { color: "var(--fg-secondary)", fontSize: "0.9em" };
 const contentOptions$1 = [{ value: "stage", label: "使用本阶段内容" }, { value: "custom", label: "单独填写" }, { value: "none", label: "不显示" }];
-function StagePresentationEditor({ stage, item, levels }) {
-  return /* @__PURE__ */ jsxs(Section, { title: "阶段表现", collapsible: true, defaultOpen: false, description: "卡片和浮现分别配置；默认使用本阶段内容，位置与大小在各自官方界面里编排。", children: [
-    /* @__PURE__ */ jsx(SurfaceEditor, { stage, item, levels, surface: "card" }, `${(item == null ? void 0 : item.id) ?? ""}/${stage.id}/card`),
-    /* @__PURE__ */ jsx(SurfaceEditor, { stage, item, levels, surface: "popup" }, `${(item == null ? void 0 : item.id) ?? ""}/${stage.id}/popup`)
-  ] });
-}
 function SurfaceEditor({ stage, item, levels, surface }) {
   const [stored, setStored] = useSetting("main.stagePresentations");
   const [configured] = useSetting("main.defaultStages");
   const [css, setCss] = useSetting("main.elementCss");
   const [presets] = useSetting("main.appearances");
-  const [contentEditing, setContentEditing] = useState(false);
-  const [timingEditing, setTimingEditing] = useState(false);
+  const [contentEditing, setContentEditing] = useEditorState("content-open:" + surface, false);
+  const [timingEditing, setTimingEditing] = useEditorState("timing-open:" + surface, false);
   const [globalUI] = useSetting("main.popup");
   const [globalDuration] = useSetting("main.durationMs");
   const [globalNotifications] = useSetting("main.notifications");
@@ -4966,7 +6638,8 @@ function SurfaceEditor({ stage, item, levels, surface }) {
   const key = presentationKey(owner);
   const own = rows2.find((r) => presentationKey(r) === key);
   const effective = resolvePresentation(rows2, defaults, stage, owner.achievementId, surface);
-  const effectiveView = materializePresentation(effective, presets ?? [], levelPresetId(levels.find((l) => l.id === (stage.levelMode === "custom" ? stage.levelId : item == null ? void 0 : item.levelId)), surface));
+  const [groups] = useSetting("main.groupCatalog");
+  const effectiveView = materializePresentation(applyGroupScheme(effective, groups ?? [], (item == null ? void 0 : item.id) ?? ""), presets ?? [], levelPresetId(levels.find((l) => l.id === (stage.levelMode === "custom" ? stage.levelId : item == null ? void 0 : item.levelId)), surface));
   const shared = item && defaults.some((s) => s.id === stage.id);
   const save = (value) => {
     try {
@@ -4990,18 +6663,18 @@ function SurfaceEditor({ stage, item, levels, surface }) {
     if (!save({ ...effective, ...owner, mode: "inherit" })) setCss(css ?? []);
   };
   const legacyCss = (css ?? []).filter((r) => r.ownerKind === (item ? "stage" : "defaultStage") && r.achievementId === owner.achievementId && r.ownerId === stage.id && r.surface === "both");
-  return /* @__PURE__ */ jsxs(
+  return /* @__PURE__ */ jsx(EditorScope, { id: surface, children: /* @__PURE__ */ jsxs(
     Section,
     {
       title: surface === "card" ? "卡片展示" : "阶段浮现",
       collapsible: true,
       defaultOpen: false,
-      description: surface === "card" ? "决定这个阶段在成就页里的内容和外观。" : "进入这个阶段时播放；相同阶段不重复播放，连续通知依次排队。",
+      description: surface === "card" ? void 0 : "进入此阶段时播放。",
       children: [
         /* @__PURE__ */ jsx("p", { style: note, children: !item ? "这是共用默认配置；成就可分别覆盖卡片或浮现。" : (own == null ? void 0 : own.mode) === "custom" ? "本项使用当前成就的专用配置。" : (own == null ? void 0 : own.mode) === "inherit" ? "本项沿用默认阶段，默认修改会同步生效。" : "当前沿用已有阶段配置；在这里修改只影响当前成就的本项。" }),
         shared && /* @__PURE__ */ jsx("div", { style: { display: "flex", gap: 8 }, children: (own == null ? void 0 : own.mode) === "custom" && /* @__PURE__ */ jsx(Button, { onClick: restore, children: "恢复默认阶段的本项表现" }) }),
-        surface === "card" ? /* @__PURE__ */ jsx(FieldRow, { label: "成就页收录", children: /* @__PURE__ */ jsx(Select$1, { value: effective.enabled ? "show" : "omit", options: [{ value: "show", label: "显示卡片" }, { value: "omit", label: "不生成卡片" }], onChange: (value) => patch({ enabled: value === "show" }) }) }) : /* @__PURE__ */ jsx(FieldRow, { label: "进入此阶段时浮现", description: "还需全局允许播放；方法块可让本次切换静默。", children: /* @__PURE__ */ jsx(Switch, { checked: effective.enabled, onChange: (enabled) => patch({ enabled }) }) }),
-        surface === "popup" && globalNotifications === false && /* @__PURE__ */ jsx("p", { style: note, children: "全局已关闭浮现；可在“界面与播放 → 浮现播放”开启。" }),
+        surface === "card" ? /* @__PURE__ */ jsx(FieldRow, { label: "成就页收录", children: /* @__PURE__ */ jsx(Select, { value: effective.enabled ? "show" : "omit", options: [{ value: "show", label: "显示卡片" }, { value: "omit", label: "不生成卡片" }], onChange: (value) => patch({ enabled: value === "show" }) }) }) : /* @__PURE__ */ jsx(FieldRow, { label: "进入此阶段时浮现", description: "还需全局允许播放；方法块可让本次切换静默。", children: /* @__PURE__ */ jsx(Switch, { checked: effective.enabled, onChange: (enabled) => patch({ enabled }) }) }),
+        surface === "popup" && globalNotifications === false && /* @__PURE__ */ jsx("p", { style: note, children: "全局已关闭浮现；可在“界面与浮现 → 浮现 → 播放规则”开启。" }),
         effective.enabled && /* @__PURE__ */ jsxs(Fragment, { children: [
           surface === "popup" && /* @__PURE__ */ jsxs(Fragment, { children: [
             /* @__PURE__ */ jsxs("p", { style: note, children: [
@@ -5013,17 +6686,17 @@ function SurfaceEditor({ stage, item, levels, surface }) {
             ] }),
             /* @__PURE__ */ jsx(Button, { onClick: () => setTimingEditing(!timingEditing), children: timingEditing ? "收起界面与时长" : "单独设置界面与时长" }),
             timingEditing && /* @__PURE__ */ jsxs(Section, { title: "界面与时长", collapsible: true, children: [
-              /* @__PURE__ */ jsx(FieldRow, { label: "浮现界面", children: /* @__PURE__ */ jsx(Select$1, { value: effective.ui ? "custom" : "default", options: [{ value: "default", label: "沿用通用方案" }, { value: "custom", label: "为此阶段选择界面" }], onChange: (value) => patch({ ui: value === "custom" ? effectiveView.ui || globalUI || "ui:@mixing-entropy.achievement/achievement-popup" : "" }) }) }),
+              /* @__PURE__ */ jsx(FieldRow, { label: "浮现界面", children: /* @__PURE__ */ jsx(Select, { value: effective.ui ? "custom" : "default", options: [{ value: "default", label: "沿用通用方案" }, { value: "custom", label: "为此阶段选择界面" }], onChange: (value) => patch({ ui: value === "custom" ? effectiveView.ui || globalUI || "ui:@mixing-entropy.achievement/achievement-popup" : "" }) }) }),
               !!effective.ui && /* @__PURE__ */ jsx(FieldRow, { label: "选择界面", children: /* @__PURE__ */ jsx(UIRefPicker, { value: effective.ui.replace(/^ui:@?/, "").replace(/^@/, ""), onChange: (ui) => patch({ ui: ui ? "ui:@" + (ui.includes("/") ? ui : "mixing-entropy.achievement/" + ui) : "" }) }) }),
               !effective.ui && /* @__PURE__ */ jsx(FieldRow, { label: "当前默认界面", children: /* @__PURE__ */ jsx(UIRefPicker, { ariaLabel: "当前沿用的浮现界面", value: (effectiveView.ui || globalUI || "ui:@mixing-entropy.achievement/achievement-popup").replace(/^ui:@?/, "").replace(/^@/, ""), disabled: true, onChange: () => {
               } }) }),
-              /* @__PURE__ */ jsx(FieldRow, { label: "浮现时长", children: /* @__PURE__ */ jsx(Select$1, { value: effective.durationMs ? "custom" : "default", options: [{ value: "default", label: "沿用通用方案" }, { value: "custom", label: "单独设置时长" }], onChange: (value) => patch({ durationMs: value === "custom" ? effectiveView.durationMs || globalDuration || 3e3 : 0 }) }) }),
+              /* @__PURE__ */ jsx(FieldRow, { label: "浮现时长", children: /* @__PURE__ */ jsx(Select, { value: effective.durationMs ? "custom" : "default", options: [{ value: "default", label: "沿用通用方案" }, { value: "custom", label: "单独设置时长" }], onChange: (value) => patch({ durationMs: value === "custom" ? effectiveView.durationMs || globalDuration || 3e3 : 0 }) }) }),
               !effective.durationMs && /* @__PURE__ */ jsxs("p", { style: note, children: [
                 "当前默认时长：",
                 (effectiveView.durationMs || globalDuration || 3e3) / 1e3,
                 " 秒"
               ] }),
-              !!effective.durationMs && /* @__PURE__ */ jsx(FieldRow, { label: "时长（毫秒）", children: /* @__PURE__ */ jsx(NumberSlider, { ariaLabel: "阶段浮现时长", value: effective.durationMs, min: 300, max: 6e4, step: 100, unit: "ms", onChange: (durationMs) => patch({ durationMs }) }) }),
+              !!effective.durationMs && /* @__PURE__ */ jsx(FieldRow, { label: "时长（毫秒）", children: /* @__PURE__ */ jsx(Numeric, { ariaLabel: "阶段浮现时长", value: effective.durationMs, min: 300, max: 6e4, step: 100, onChange: (durationMs) => patch({ durationMs }) }) }),
               /* @__PURE__ */ jsx("p", { style: note, children: "进场、退场动画和元素排版，在所选浮现界面的官方编辑器设置。" }),
               /* @__PURE__ */ jsx(Button, { onClick: () => patch({ ui: "", durationMs: 0 }), children: "恢复沿用界面与时长" })
             ] })
@@ -5034,18 +6707,17 @@ function SurfaceEditor({ stage, item, levels, surface }) {
             "。"
           ] }),
           /* @__PURE__ */ jsx(Button, { onClick: () => setContentEditing(!contentEditing), children: contentEditing ? "收起内容设置" : "单独设置内容" }),
-          contentEditing && /* @__PURE__ */ jsxs(Section, { title: "单独内容", collapsible: true, description: "只影响本处；卡片和浮现都从当前阶段读取，不互相继承。", children: [
-            /* @__PURE__ */ jsx(FieldRow, { label: "名称", children: /* @__PURE__ */ jsx(Select$1, { value: effectiveView.nameMode, options: contentOptions$1, onChange: (nameMode) => patchContent({ nameMode }) }) }),
+          contentEditing && /* @__PURE__ */ jsxs(Section, { title: "单独内容", collapsible: true, children: [
+            /* @__PURE__ */ jsx(FieldRow, { label: "名称", children: /* @__PURE__ */ jsx(Select, { value: effectiveView.nameMode, options: contentOptions$1, onChange: (nameMode) => patchContent({ nameMode }) }) }),
             effective.nameMode === "custom" && /* @__PURE__ */ jsx(FieldRow, { label: "显示名称", children: /* @__PURE__ */ jsx(TextInput, { value: effective.displayName, onChange: (displayName) => patchContent({ displayName }) }) }),
-            /* @__PURE__ */ jsx(FieldRow, { label: "说明", children: /* @__PURE__ */ jsx(Select$1, { value: effectiveView.descriptionMode, options: contentOptions$1, onChange: (descriptionMode) => patchContent({ descriptionMode }) }) }),
+            /* @__PURE__ */ jsx(FieldRow, { label: "说明", children: /* @__PURE__ */ jsx(Select, { value: effectiveView.descriptionMode, options: contentOptions$1, onChange: (descriptionMode) => patchContent({ descriptionMode }) }) }),
             effective.descriptionMode === "custom" && /* @__PURE__ */ jsx(FieldRow, { label: "显示说明", children: /* @__PURE__ */ jsx(TextInput, { multiline: true, value: effective.description, onChange: (description) => patchContent({ description }) }) }),
-            /* @__PURE__ */ jsx(FieldRow, { label: "图标", children: /* @__PURE__ */ jsx(Select$1, { value: effectiveView.iconMode, options: [...contentOptions$1, { value: "unknown", label: "默认未知图标" }], onChange: (iconMode) => patchContent({ iconMode }) }) }),
+            /* @__PURE__ */ jsx(FieldRow, { label: "图标", children: /* @__PURE__ */ jsx(Select, { value: effectiveView.iconMode, options: [...contentOptions$1, { value: "unknown", label: "默认未知图标" }], onChange: (iconMode) => patchContent({ iconMode }) }) }),
             effective.iconMode === "custom" && /* @__PURE__ */ jsx(FieldRow, { label: "显示图标", children: /* @__PURE__ */ jsx(AssetPicker, { accepts: ["image"], value: effective.icon, onChange: (icon) => patchContent({ icon }) }) }),
             /* @__PURE__ */ jsx(FieldRow, { label: "显示等级", children: /* @__PURE__ */ jsx(Switch, { checked: effectiveView.showLevel, onChange: (showLevel) => patchContent({ showLevel }) }) }),
             /* @__PURE__ */ jsx(FieldRow, { label: "显示阶段名称", children: /* @__PURE__ */ jsx(Switch, { checked: effectiveView.showStageName, onChange: (showStageName) => patchContent({ showStageName }) }) }),
             /* @__PURE__ */ jsx(Button, { onClick: () => {
-              patch({ contentOverride: false, nameMode: "stage", descriptionMode: "stage", iconMode: "stage", displayName: "", description: "", icon: "", showLevel: stage.showLevel, showStageName: stage.showStageName });
-              setContentEditing(false);
+              if (patch({ contentOverride: false, nameMode: "stage", descriptionMode: "stage", iconMode: "stage", displayName: "", description: "", icon: "", showLevel: stage.showLevel, showStageName: stage.showStageName })) setContentEditing(false);
             }, children: "恢复沿用内容" })
           ] }),
           /* @__PURE__ */ jsx(StageAppearanceEditor, { stage: { ...stage, ...optionalAppearance({ ...effective }), ...parseAppearanceBinding(effective) }, patch: (changes) => patch(changes), levels, item, surface, presentation: effective }),
@@ -5059,7 +6731,7 @@ ${r.css}`).join("\n") }),
         error && /* @__PURE__ */ jsx("p", { role: "alert", children: error })
       ]
     }
-  );
+  ) });
 }
 function localRemovalReason(item, stages, id2) {
   if (!stages.some((s) => s.id === id2)) return "此阶段已不存在。";
@@ -5088,84 +6760,124 @@ function removeDefaultStage(stages, items, overrides, levels, id2) {
   catalog(levels, items, overrides, next);
   return next;
 }
-const contentOptions = [{ value: "base", label: "使用成就基础配置" }, { value: "custom", label: "本阶段自定义" }, { value: "none", label: "不显示" }];
-const noteStyle = { color: "var(--fg-secondary)" };
-const actionsStyle = { display: "flex", gap: 8, flexWrap: "wrap", margin: "8px 0" };
-function StageFields({ stage, patch, levels, item }) {
-  return /* @__PURE__ */ jsxs(Fragment, { children: [
-    /* @__PURE__ */ jsxs(Section, { title: "阶段信息", collapsible: true, defaultOpen: false, children: [
-      /* @__PURE__ */ jsx(FieldRow, { label: "阶段名称", children: /* @__PURE__ */ jsx(TextInput, { value: stage.name, onChange: (name) => patch({ name }) }) }),
-      /* @__PURE__ */ jsxs("p", { style: noteStyle, children: [
-        "阶段编号：",
-        stage.id,
-        "。修改名称不改变编号。"
-      ] })
-    ] }),
-    /* @__PURE__ */ jsxs(Section, { title: "阶段等级", collapsible: true, defaultOpen: false, children: [
-      /* @__PURE__ */ jsx(FieldRow, { label: "本阶段等级", description: "使用基础等级时，每个成就读取自己的基础配置，不继承上一阶段。", children: /* @__PURE__ */ jsx(
-        Select$1,
-        {
-          value: stage.levelMode ?? "base",
-          options: [{ value: "base", label: "使用成就基础等级" }, { value: "custom", label: "指定本阶段等级" }],
-          onChange: (value) => {
-            var _a;
-            return patch({ levelMode: value, ...value === "custom" && !levels.some((l) => l.id === stage.levelId) ? { levelId: (item == null ? void 0 : item.levelId) || ((_a = levels[0]) == null ? void 0 : _a.id) || "bronze" } : {} });
-          }
-        }
-      ) }),
-      stage.levelMode === "custom" && /* @__PURE__ */ jsx(FieldRow, { label: "选择等级", children: /* @__PURE__ */ jsx(Select$1, { value: stage.levelId, options: levels.map((l) => ({ value: l.id, label: l.name + "（" + l.id + "）" })), onChange: (levelId) => patch({ levelId }) }) })
-    ] }),
-    /* @__PURE__ */ jsxs(Section, { title: "本阶段内容", collapsible: true, defaultOpen: false, description: "卡片和浮现默认使用这里的内容，各自也能单独填写。", children: [
-      /* @__PURE__ */ jsx("p", { style: noteStyle, children: "“使用成就基础配置”读取对应成就的名称、说明或图标，不继承上一阶段。" }),
-      ["name", "description", "icon"].map((field) => /* @__PURE__ */ jsx(StageContentField, { field, stage, item, patch }, stage.id + field))
-    ] }),
-    /* @__PURE__ */ jsx(StagePresentationEditor, { stage, item, levels })
+function StagePicker({ value, stages, initialStageId, onChange, removalReason, onRemove }) {
+  const [expanded, setExpanded] = useEditorState("stages-expanded", false);
+  const [query, setQuery] = useEditorState("stage-query", "");
+  const many = stages.length > 8, collapsed = many && !expanded;
+  const listId = useId(), listRef = useRef(null);
+  const visible = many && expanded && query.trim() ? stages.filter((s) => `${s.name} ${s.id}`.toLowerCase().includes(query.trim().toLowerCase())) : stages;
+  useEffect(() => {
+    const list2 = listRef.current;
+    if (!list2 || !collapsed) return;
+    const revealSelected = () => {
+      const button = list2.querySelector("[aria-current]");
+      if (!button) return;
+      const box = button.getBoundingClientRect(), viewport = list2.getBoundingClientRect();
+      const zoom = list2.clientWidth ? viewport.width / list2.clientWidth : 1;
+      if (box.left < viewport.left) list2.scrollLeft -= (viewport.left - box.left) / zoom;
+      else if (box.right > viewport.right) list2.scrollLeft += (box.right - viewport.right) / zoom;
+    };
+    revealSelected();
+    const observer = typeof ResizeObserver === "undefined" ? void 0 : new ResizeObserver(revealSelected);
+    observer == null ? void 0 : observer.observe(list2);
+    return () => observer == null ? void 0 : observer.disconnect();
+  }, [collapsed, value, stages.length]);
+  return /* @__PURE__ */ jsxs("div", { className: "aw-stage-picker", children: [
+    many && expanded && /* @__PURE__ */ jsx("input", { className: "aw-input", placeholder: "搜索阶段名称或编号", "aria-label": "搜索阶段", value: query, onChange: (e) => setQuery(e.target.value) }),
+    /* @__PURE__ */ jsxs("div", { className: "aw-stage-strip", "data-collapsed": collapsed, children: [
+      /* @__PURE__ */ jsxs("div", { id: listId, ref: listRef, className: "aw-tabs aw-stage-blocks", role: "group", "aria-label": "选择阶段", children: [
+        visible.map((s) => /* @__PURE__ */ jsx(RemovalContext, { title: `${s.name}（${s.id}）`, label: "移除阶段", detail: "从当前成就移除此阶段。", reason: removalReason(s.id), onRemove: () => onRemove(s.id), children: /* @__PURE__ */ jsxs("button", { type: "button", "data-stage-id": s.id, title: `${s.name}（${s.id}）`, "aria-current": value === s.id ? "page" : void 0, onClick: () => onChange(s.id), children: [
+          s.name,
+          s.id === initialStageId ? " · 初始" : ""
+        ] }) }, s.id)),
+        !visible.length && /* @__PURE__ */ jsx("span", { className: "aw-note", children: "没有匹配的阶段" })
+      ] }),
+      many && /* @__PURE__ */ jsx("button", { type: "button", className: "aw-stage-toggle", "aria-expanded": expanded, "aria-controls": listId, onClick: () => setExpanded(!expanded), children: expanded ? "收起" : `展开（${stages.length}）` })
+    ] })
   ] });
 }
-function StageContentField({ field, stage, item, patch }) {
-  const [editing, setEditing] = useState(false);
-  const key = field === "name" ? "nameMode" : field === "description" ? "descriptionMode" : "iconMode";
-  const valueKey = field === "name" ? "displayName" : field;
-  const label = { name: "名称", description: "说明", icon: "图标" }[field];
-  const mode2 = stage[key];
-  const summary = mode2 === "base" ? (item == null ? void 0 : item[field]) || "对应成就的基础配置" : mode2 === "none" ? "不显示" : mode2 === "unknown" ? "默认未知图标" : stage[valueKey] || "（空内容）";
-  return /* @__PURE__ */ jsxs(FieldRow, { label, children: [
-    /* @__PURE__ */ jsxs("p", { style: { ...noteStyle, whiteSpace: "pre-wrap", overflowWrap: "anywhere" }, children: [
-      summary,
-      " ",
-      mode2 === "base" ? " · 沿用基础资料" : " · 本阶段设置"
-    ] }),
-    /* @__PURE__ */ jsx(Button, { onClick: () => setEditing(!editing), children: editing ? "收起" : "单独设置" }),
-    editing && /* @__PURE__ */ jsxs("div", { style: { marginTop: 8 }, children: [
-      /* @__PURE__ */ jsx(Select$1, { value: mode2, options: [...contentOptions, ...field === "icon" ? [{ value: "unknown", label: "默认未知图标" }] : []], onChange: (value) => patch({ [key]: value }) }),
-      mode2 === "custom" && (field === "icon" ? /* @__PURE__ */ jsx(AssetPicker, { accepts: ["image"], value: stage.icon, onChange: (icon) => patch({ icon }) }) : /* @__PURE__ */ jsx(TextInput, { multiline: field === "description", value: stage[valueKey], onChange: (value) => patch({ [valueKey]: value }) })),
-      /* @__PURE__ */ jsx(Button, { onClick: () => {
-        patch({ [key]: "base" });
-        setEditing(false);
-      }, children: "恢复沿用基础资料" })
+function usePreserveTiers(defaults, overrides, onlyAchievement) {
+  const [saved, save] = useSetting("main.stageTiers");
+  return () => {
+    const byAchievement = /* @__PURE__ */ new Map();
+    for (const row of saved ?? []) {
+      if (onlyAchievement && row.achievementId !== onlyAchievement) continue;
+      const own = byAchievement.get(row.achievementId);
+      if (own) own.push(row);
+      else byAchievement.set(row.achievementId, [row]);
+    }
+    const changed = /* @__PURE__ */ new Map();
+    for (const [id2, own] of byAchievement) {
+      const resolved = resolveTiers(id2, own, resolveStages(id2, defaults, overrides));
+      if (resolved !== own) changed.set(id2, resolved);
+    }
+    if (!changed.size) return true;
+    return save([...(saved ?? []).filter((row) => !changed.has(row.achievementId)), ...Array.from(changed.values()).flat()]);
+  };
+}
+const contentOptions = [{ value: "base", label: "使用成就基础配置" }, { value: "custom", label: "本阶段自定义" }, { value: "none", label: "不显示" }];
+function SteamAchievementField({ achievementId, stageId }) {
+  var _a;
+  const [bindings, save] = useSetting("main.steamAchievements");
+  const rows2 = bindings ?? [];
+  const matches = (row) => row.achievementId === achievementId && row.stageId === stageId;
+  const update = (raw) => {
+    const apiName = raw.trim();
+    const next = rows2.filter((row) => !matches(row));
+    if (apiName) next.push({ achievementId, stageId, apiName });
+    return save(next);
+  };
+  return /* @__PURE__ */ jsx(FieldRow, { label: "关联 Steam 成就", description: "选填 Steamworks 中的 API Name。剧情获得本阶段时解锁。", children: /* @__PURE__ */ jsx(TextInput, { value: ((_a = rows2.find(matches)) == null ? void 0 : _a.apiName) ?? "", onChange: update }) });
+}
+function StageFields({ stage, patch, levels, item }) {
+  const [tab, setTab] = useSelection("surface:" + ((item == null ? void 0 : item.id) ?? "") + ":" + stage.id, "content");
+  return /* @__PURE__ */ jsxs(Fragment, { children: [
+    /* @__PURE__ */ jsx(Tabs, { label: "阶段编辑区", value: tab, onChange: setTab, items: [{ id: "content", name: "阶段内容" }, { id: "card", name: "卡片" }, { id: "popup", name: "浮现" }] }),
+    /* @__PURE__ */ jsxs("div", { className: "aw-stage-grid", children: [
+      /* @__PURE__ */ jsx("div", { children: tab === "content" ? /* @__PURE__ */ jsxs(Section, { title: "阶段内容", children: [
+        /* @__PURE__ */ jsx(FieldRow, { label: "阶段名称", children: /* @__PURE__ */ jsx(TextInput, { required: true, value: stage.name, onChange: (name) => patch({ name }) }) }),
+        item && /* @__PURE__ */ jsx(SteamAchievementField, { achievementId: item.id, stageId: stage.id }),
+        /* @__PURE__ */ jsxs(FieldRow, { label: "本阶段等级", children: [
+          /* @__PURE__ */ jsx(Select, { value: stage.levelMode ?? "base", options: [{ value: "base", label: "使用成就基础等级" }, { value: "custom", label: "指定本阶段等级" }], onChange: (value) => {
+            var _a;
+            return patch({ levelMode: value, ...value === "custom" && !levels.some((l) => l.id === stage.levelId) ? { levelId: (item == null ? void 0 : item.levelId) || ((_a = levels[0]) == null ? void 0 : _a.id) || "bronze" } : {} });
+          } }),
+          stage.levelMode === "custom" && /* @__PURE__ */ jsx(Select, { value: stage.levelId, options: levels.map((l) => ({ value: l.id, label: l.name })), onChange: (levelId) => patch({ levelId }) })
+        ] }),
+        ["name", "description", "icon"].map((field) => {
+          const modeKey = field === "name" ? "nameMode" : field === "description" ? "descriptionMode" : "iconMode", valueKey = field === "name" ? "displayName" : field;
+          return /* @__PURE__ */ jsxs(FieldRow, { label: { name: "名称显示", description: "说明显示", icon: "图标显示" }[field], children: [
+            /* @__PURE__ */ jsx(Select, { value: stage[modeKey], options: [...contentOptions, ...field === "icon" ? [{ value: "unknown", label: "默认未知图标" }] : []], onChange: (value) => patch({ [modeKey]: value }) }),
+            stage[modeKey] === "base" && /* @__PURE__ */ jsxs("p", { className: "aw-note", children: [
+              "来源：成就基础配置 · ",
+              (item == null ? void 0 : item[field]) || "对应成就的基础内容"
+            ] }),
+            stage[modeKey] === "custom" && (field === "icon" ? /* @__PURE__ */ jsx(AssetPicker, { accepts: ["image"], value: stage.icon, onChange: (icon) => patch({ icon }) }) : /* @__PURE__ */ jsx(TextInput, { multiline: field === "description", value: stage[valueKey], onChange: (value) => patch({ [valueKey]: value }) }))
+          ] }, field);
+        }),
+        /* @__PURE__ */ jsx(FieldRow, { label: "显示等级", children: /* @__PURE__ */ jsx(Switch, { checked: stage.showLevel, onChange: (showLevel) => patch({ showLevel }) }) }),
+        /* @__PURE__ */ jsx(FieldRow, { label: "显示阶段名称", children: /* @__PURE__ */ jsx(Switch, { checked: stage.showStageName, onChange: (showStageName) => patch({ showStageName }) }) })
+      ] }) : /* @__PURE__ */ jsx(SurfaceEditor, { stage, item, levels, surface: tab === "popup" ? "popup" : "card" }) }),
+      /* @__PURE__ */ jsx("aside", { className: "aw-preview", children: /* @__PURE__ */ jsx(ContentPreview, { item, stage, surface: tab === "popup" ? "popup" : "card" }) })
     ] })
   ] });
 }
 function DefaultStageEditor() {
-  const [configured, setConfigured] = useSetting("main.defaultStages");
-  const [items] = useSetting("main.achievements");
-  const [overrides] = useSetting("main.displayStages");
-  const [configuredLevels] = useSetting("main.levels");
-  const levels = (configuredLevels == null ? void 0 : configuredLevels.length) ? configuredLevels : DEFAULT_LEVELS;
-  const defaults = defaultsFor(configured);
-  const [selected, select] = useState("unknown");
-  const [error, setError] = useState("");
-  const stage = defaults.find((s) => s.id === selected) ?? defaults[0];
-  const save = (next, structural = false) => {
-    if (structural) try {
+  const [configured, setConfigured] = useSetting("main.defaultStages"), [items] = useSetting("main.achievements"), [overrides] = useSetting("main.displayStages"), [configuredLevels] = useSetting("main.levels");
+  const levels = (configuredLevels == null ? void 0 : configuredLevels.length) ? configuredLevels : DEFAULT_LEVELS, defaults = defaultsFor(configured);
+  const [selected, select] = useSelection("default-stage", "unknown"), [error, setError] = useState("");
+  const nav = useNavigation(), stage = defaults.find((s) => s.id === selected) ?? defaults[0];
+  const preserveTiers = usePreserveTiers(configured, overrides);
+  const save = (next) => {
+    try {
       catalog(levels, items ?? [], overrides ?? [], next);
+      const ok = preserveTiers() && setConfigured(next);
+      setError(ok ? "" : "保存被拒绝。");
+      return ok;
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(String(e));
       return false;
     }
-    const ok = setConfigured(next);
-    setError(ok ? "" : "保存失败，请检查内容。");
-    return ok;
   };
   const removalReason = (id2) => defaultRemovalReason(defaults, items ?? [], overrides ?? [], id2);
   const remove = (id2) => {
@@ -5173,249 +6885,201 @@ function DefaultStageEditor() {
       const next = removeDefaultStage(defaults, items ?? [], overrides ?? [], levels, id2);
       if (save(next) && stage.id === id2) select(next[0].id);
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(String(e));
     }
   };
-  return /* @__PURE__ */ jsxs(Fragment, { children: [
-    /* @__PURE__ */ jsx(FieldRow, { label: "编辑默认阶段", description: "展开列表，右键阶段可删除；影响沿用该默认阶段的成就。", children: /* @__PURE__ */ jsx(StagePicker, { value: stage.id, stages: defaults, onChange: select, removalReason, onRemove: remove, shared: true }) }),
-    /* @__PURE__ */ jsxs("div", { style: actionsStyle, children: [
-      /* @__PURE__ */ jsx(Button, { onClick: () => {
-        const next = { ...defaultsFor()[1], id: "stage_" + crypto.randomUUID(), name: "新默认阶段" };
-        if (save([...defaults, next], true)) select(next.id);
-      }, children: "添加默认阶段" }),
-      /* @__PURE__ */ jsx(Button, { disabled: !!removalReason(stage.id), title: removalReason(stage.id) || void 0, onClick: () => remove(stage.id), children: "移除此默认阶段" })
-    ] }),
-    removalReason(stage.id) && /* @__PURE__ */ jsx("p", { style: noteStyle, children: removalReason(stage.id) }),
-    /* @__PURE__ */ jsx(StageFields, { stage, levels, patch: (changes) => save(defaults.map((s) => s.id === stage.id ? { ...s, ...changes } : s)) }),
+  const references = (items ?? []).filter((a) => !(overrides == null ? void 0 : overrides.some((o) => o.achievementId === a.id && o.id === stage.id)));
+  return /* @__PURE__ */ jsxs(Workspace, { list: /* @__PURE__ */ jsx(ObjectList, { title: "默认阶段", items: defaults, selected: stage.id, onSelect: select, onRemove: remove, removalReason, actions: /* @__PURE__ */ jsx(Button, { onClick: () => {
+    const next = { ...defaultsFor()[1], id: "stage_" + crypto.randomUUID(), name: "新默认阶段" };
+    if (save([...defaults, next])) select(next.id);
+  }, children: "＋ 默认阶段" }) }), children: [
+    /* @__PURE__ */ jsxs(EditorScope, { id: "default-stage:" + stage.id, children: [
+      /* @__PURE__ */ jsxs("div", { className: "aw-scope", children: [
+        /* @__PURE__ */ jsxs("strong", { children: [
+          "共用配置 · ",
+          stage.name
+        ] }),
+        /* @__PURE__ */ jsxs("p", { className: "aw-note", children: [
+          stage.id,
+          " · 修改会影响沿用它的成就，各成就的专用覆盖保持。"
+        ] })
+      ] }),
+      /* @__PURE__ */ jsxs("details", { children: [
+        /* @__PURE__ */ jsxs("summary", { children: [
+          "沿用阶段内容的成就（",
+          references.length,
+          "）"
+        ] }),
+        /* @__PURE__ */ jsx("div", { className: "aw-actions", children: references.map((a) => /* @__PURE__ */ jsx(Button, { onClick: () => {
+          nav == null ? void 0 : nav.select("stage:" + a.id, stage.id);
+          nav == null ? void 0 : nav.jump({ area: "achievements", sub: "" }, "achievement", a.id);
+        }, children: a.name }, a.id)) })
+      ] }),
+      /* @__PURE__ */ jsx(StageFields, { stage, levels, patch: (v) => save(defaults.map((s) => s.id === stage.id ? { ...s, ...v } : s)) }),
+      /* @__PURE__ */ jsx(Button, { disabled: !!removalReason(stage.id), title: removalReason(stage.id), onClick: () => remove(stage.id), children: "移除此默认阶段" }),
+      /* @__PURE__ */ jsx("p", { className: "aw-note", children: removalReason(stage.id) })
+    ] }, stage.id),
     error && /* @__PURE__ */ jsx("p", { role: "alert", children: error })
   ] });
 }
 function AchievementStageEditor({ item, setInitial }) {
-  const [configured] = useSetting("main.defaultStages");
-  const [saved, setSaved] = useSetting("main.displayStages");
-  const [configuredLevels] = useSetting("main.levels");
-  const levels = (configuredLevels == null ? void 0 : configuredLevels.length) ? configuredLevels : DEFAULT_LEVELS;
-  const defaults = defaultsFor(configured);
-  const all = resolveStages(item.id, configured, saved);
-  const [selected, select] = useState(item.initialStageId || "unknown");
-  const [error, setError] = useState("");
-  const stage = all.find((s) => s.id === selected) ?? all[0];
-  const own = saved == null ? void 0 : saved.find((s) => s.achievementId === item.id && s.id === (stage == null ? void 0 : stage.id) && !s.disabled);
-  const shared = defaults.find((s) => s.id === (stage == null ? void 0 : stage.id));
+  const [configured] = useSetting("main.defaultStages"), [saved, setSaved] = useSetting("main.displayStages"), [configuredLevels] = useSetting("main.levels");
+  const levels = (configuredLevels == null ? void 0 : configuredLevels.length) ? configuredLevels : DEFAULT_LEVELS, defaults = defaultsFor(configured), all = resolveStages(item.id, configured, saved);
+  const [selected, select] = useSelection("stage:" + item.id, item.initialStageId || "unknown"), [error, setError] = useState("");
+  const stage = all.find((s) => s.id === selected) ?? all[0], nav = useNavigation();
+  const own = saved == null ? void 0 : saved.find((s) => s.achievementId === item.id && s.id === (stage == null ? void 0 : stage.id) && !s.disabled), shared = defaults.find((s) => s.id === (stage == null ? void 0 : stage.id));
   const removed = defaults.filter((s) => saved == null ? void 0 : saved.some((o) => o.achievementId === item.id && o.id === s.id && o.disabled));
+  const preserveTiers = usePreserveTiers(configured, saved, item.id);
   const save = (next) => {
-    const ok = setSaved(next);
-    setError(ok ? "" : "保存失败，请检查内容。");
+    const ok = preserveTiers() && setSaved(next);
+    setError(ok ? "" : "保存被拒绝。");
     return ok;
   };
   const without = (id2) => (saved ?? []).filter((s) => !(s.achievementId === item.id && s.id === id2));
   const saveStage = (next) => save([...without(next.id), next]);
-  const removalReason = (id2) => localRemovalReason(item, all, id2);
+  const reason = (id2) => localRemovalReason(item, all, id2);
   const remove = (id2) => {
     try {
       const next = removeLocalStage(item, configured, saved, id2);
       if (save(next) && (stage == null ? void 0 : stage.id) === id2) select(all.find((s) => s.id !== id2).id);
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(String(e));
     }
   };
   return /* @__PURE__ */ jsxs(Fragment, { children: [
-    /* @__PURE__ */ jsx(FieldRow, { label: "初始展示阶段", description: "只用于尚无阶段记录的新成就，已有记录不会改变。", children: /* @__PURE__ */ jsx(Select$1, { value: item.initialStageId || "unknown", placeholder: "请选择有效的初始阶段", options: all.map((s) => ({ value: s.id, label: s.name })), onChange: setInitial }) }),
-    /* @__PURE__ */ jsx(FieldRow, { label: "编辑阶段", description: "展开列表，右键阶段可删除；只影响当前成就。", children: /* @__PURE__ */ jsx(StagePicker, { value: (stage == null ? void 0 : stage.id) ?? "", stages: all, onChange: select, removalReason, onRemove: remove }) }),
-    stage && /* @__PURE__ */ jsx("p", { style: noteStyle, children: own ? "阶段信息与内容使用本成就专用配置；卡片和浮现的继承分别设置。" : "阶段信息与内容沿用默认配置；卡片和浮现可分别配置。" }),
-    /* @__PURE__ */ jsxs("div", { style: actionsStyle, children: [
+    /* @__PURE__ */ jsx(FieldRow, { label: "初始阶段", description: "尚无记录时使用的起始阶段；已有玩家记录不变。", children: /* @__PURE__ */ jsx(Select, { value: item.initialStageId || "unknown", options: all.map((s) => ({ value: s.id, label: s.name })), onChange: setInitial }) }),
+    /* @__PURE__ */ jsx(TierEditor, { achievement: item.id, stages: all }),
+    /* @__PURE__ */ jsx(StagePicker, { value: (stage == null ? void 0 : stage.id) ?? "", stages: all, initialStageId: item.initialStageId, onChange: select, removalReason: reason, onRemove: remove }),
+    /* @__PURE__ */ jsxs("div", { className: "aw-actions", children: [
       /* @__PURE__ */ jsx(Button, { onClick: () => {
         const next = { ...presetStages(item.id)[1], id: "stage_" + crypto.randomUUID(), name: "新阶段" };
         if (saveStage(next)) select(next.id);
-      }, children: "添加本成就阶段" }),
+      }, children: "＋ 本成就阶段" }),
       stage && own && shared && /* @__PURE__ */ jsx(Button, { onClick: () => save(without(stage.id)), children: "恢复阶段信息与内容" }),
-      stage && /* @__PURE__ */ jsx(Button, { disabled: !!removalReason(stage.id), title: removalReason(stage.id) || void 0, onClick: () => remove(stage.id), children: "从此成就移除阶段" })
+      stage && /* @__PURE__ */ jsx(Button, { disabled: !!reason(stage.id), title: reason(stage.id), onClick: () => remove(stage.id), children: "移除此阶段" }),
+      shared && /* @__PURE__ */ jsx(Button, { onClick: () => nav == null ? void 0 : nav.jump({ area: "attributes", sub: "defaults" }, "default-stage", shared.id), children: "查看默认来源" })
     ] }),
-    removed.length > 0 && /* @__PURE__ */ jsx(FieldRow, { label: "恢复已移除的默认阶段", children: /* @__PURE__ */ jsx(
-      Select$1,
-      {
-        value: "",
-        options: [{ value: "", label: "选择要恢复的阶段", disabled: true }, ...removed.map((s) => ({ value: s.id, label: s.name }))],
-        onChange: (id2) => {
-          if (save(without(id2))) select(id2);
-        }
-      }
-    ) }),
-    stage && /* @__PURE__ */ jsx(StageFields, { stage, item, levels, patch: (changes) => saveStage({ ...stage, ...changes, disabled: false }) }),
+    removed.length > 0 && /* @__PURE__ */ jsx(FieldRow, { label: "恢复已移除的默认阶段", children: /* @__PURE__ */ jsx(Select, { value: "", options: removed.map((s) => ({ value: s.id, label: s.name })), placeholder: "选择要恢复的阶段", onChange: (id2) => {
+      if (save(without(id2))) select(id2);
+    } }) }),
+    stage && /* @__PURE__ */ jsxs(EditorScope, { id: "stage:" + stage.id, children: [
+      /* @__PURE__ */ jsxs("div", { className: "aw-scope", children: [
+        /* @__PURE__ */ jsxs("strong", { children: [
+          item.name,
+          " / ",
+          stage.name,
+          stage.id === item.initialStageId ? " · 初始阶段" : ""
+        ] }),
+        /* @__PURE__ */ jsxs("p", { className: "aw-note", children: [
+          stage.id,
+          " · ",
+          own ? "本成就专用内容" : "沿用默认内容"
+        ] })
+      ] }),
+      /* @__PURE__ */ jsx(StageFields, { stage, item, levels, patch: (v) => saveStage({ ...stage, ...v, disabled: false }) })
+    ] }, stage.id),
     error && /* @__PURE__ */ jsx("p", { role: "alert", children: error })
   ] });
 }
 function AchievementEditor() {
   const [saved, setSaved] = useSetting("main.achievements");
-  const [configuredLevels] = useSetting("main.levels");
-  const [configuredStages] = useSetting("main.defaultStages");
-  const [stageOverrides] = useSetting("main.displayStages");
-  const items = saved ?? [];
-  const levels = (configuredLevels == null ? void 0 : configuredLevels.length) ? configuredLevels : DEFAULT_LEVELS;
-  const [open, setOpen] = useState(() => /* @__PURE__ */ new Set());
-  const [newId, setNewId] = useState("");
-  const [removeId, setRemoveId] = useState("");
-  const [error, setError] = useState("");
+  const [configuredLevels] = useSetting("main.levels"), [configuredStages] = useSetting("main.defaultStages"), [stageOverrides] = useSetting("main.displayStages");
+  const [groups] = useSetting("main.groupCatalog");
+  const [filter, setFilter] = useEditorState("group-filter", "");
+  const groupList = orderedGroups(groups ?? []);
+  const items = saved ?? [], levels = (configuredLevels == null ? void 0 : configuredLevels.length) ? configuredLevels : DEFAULT_LEVELS;
+  const [selected, select] = useSelection("achievement"), [newId, setNewId] = useEditorState("new-id", ""), [creating, setCreating] = useEditorState("creating", false);
+  const [removeId, setRemoveId] = useState(""), [error, setError] = useState("");
+  const shown = groupList.some((g) => g.id === filter) ? membersOf(groups ?? [], filter).flatMap((m) => items.find((a) => a.id === m.achievement) ?? []) : items;
+  const item = shown.find((a) => a.id === selected) ?? shown[0];
   const save = (next) => {
     const ok = setSaved(next);
-    setError(ok ? "" : "保存失败，请检查填写内容。");
+    setError(ok ? "" : "保存被拒绝，原配置保持。");
     return ok;
   };
-  const patch = (item, changes) => save(items.map((a) => a.id === item.id ? { ...a, ...changes } : a));
-  const toggle = (id2) => setOpen((previous) => {
-    const next = new Set(previous);
-    if (next.has(id2)) next.delete(id2);
-    else next.add(id2);
-    return next;
-  });
+  const add = () => {
+    var _a;
+    const id2 = newId.trim() || "achievement_" + crypto.randomUUID();
+    if (!/^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/.test(id2)) {
+      setError("编号格式无效。");
+      return;
+    }
+    if (items.some((a) => a.id === id2)) {
+      setError("这个成就编号已经存在。");
+      return;
+    }
+    const stages = resolveStages(id2, configuredStages, stageOverrides);
+    if (!stages.length) {
+      setError("此编号没有可用阶段，请使用新编号。");
+      return;
+    }
+    if (save([...items, { id: id2, name: "新成就", description: "", icon: "", levelId: levels[0].id, initialStageId: ((_a = stages.find((s) => s.id === "unknown")) == null ? void 0 : _a.id) ?? stages[0].id }])) {
+      setFilter("");
+      select(id2);
+      setCreating(false);
+      setNewId("");
+    }
+  };
+  return /* @__PURE__ */ jsxs(Workspace, { selected: !!item, list: /* @__PURE__ */ jsx(
+    ObjectList,
+    {
+      title: "成就",
+      items: shown,
+      selected: (item == null ? void 0 : item.id) ?? "",
+      onSelect: select,
+      onRemove: (id2) => {
+        select(id2);
+        setRemoveId(id2);
+      },
+      actions: /* @__PURE__ */ jsx(Button, { disabled: items.length >= 1e4, onClick: () => setCreating(!creating), children: "＋ 新建成就" }),
+      extra: /* @__PURE__ */ jsxs(Fragment, { children: [
+        !!groupList.length && /* @__PURE__ */ jsx(Select, { value: filter, options: [{ value: "", label: "全部成就" }, ...groupList.map((g) => ({ value: g.id, label: g.name ?? g.id }))], onChange: setFilter }),
+        " ",
+        creating && /* @__PURE__ */ jsxs("div", { className: "aw-section", children: [
+          /* @__PURE__ */ jsx("p", { className: "aw-note", children: "稳定编号，可留空自动生成。" }),
+          /* @__PURE__ */ jsx(TextInput$1, { value: newId, onChange: setNewId, placeholder: "first_step" }),
+          /* @__PURE__ */ jsx(Button, { onClick: add, children: "创建" })
+        ] })
+      ] })
+    }
+  ), children: [
+    error && /* @__PURE__ */ jsx("p", { role: "alert", children: error }),
+    item && /* @__PURE__ */ jsxs(EditorScope, { id: "achievement:" + item.id, children: [
+      /* @__PURE__ */ jsx(AchievementDetail, { item, levels, patch: (changes) => save(items.map((a) => a.id === item.id ? { ...a, ...changes } : a)) }),
+      /* @__PURE__ */ jsx("div", { className: "aw-actions", children: removeId === item.id ? /* @__PURE__ */ jsxs(Fragment, { children: [
+        /* @__PURE__ */ jsx("span", { children: "移除成就配置？已有玩家阶段记录保留。" }),
+        /* @__PURE__ */ jsx(Button, { variant: "danger", onClick: () => {
+          if (save(items.filter((a) => a.id !== item.id))) setRemoveId("");
+        }, children: "确认移除" }),
+        /* @__PURE__ */ jsx(Button, { onClick: () => setRemoveId(""), children: "取消" })
+      ] }) : /* @__PURE__ */ jsx(Button, { onClick: () => setRemoveId(item.id), children: "移除成就…" }) })
+    ] }, item.id)
+  ] });
+}
+function AchievementDetail({ item, levels, patch }) {
+  const [tab, setTab] = useSelection("detail:" + item.id, "stages"), nav = useNavigation();
+  const [groups] = useSetting("main.groupCatalog");
+  const resolved = effectiveDefaults(groups ?? [], item.id);
   return /* @__PURE__ */ jsxs(Fragment, { children: [
-    /* @__PURE__ */ jsxs("div", { style: { display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginBottom: 12 }, children: [
-      /* @__PURE__ */ jsxs("span", { children: [
-        items.length,
-        " 个成就"
+    /* @__PURE__ */ jsx("h2", { children: item.name }),
+    /* @__PURE__ */ jsxs("div", { className: "aw-actions", children: [
+      /* @__PURE__ */ jsxs("span", { className: "aw-note", children: [
+        "成就编号：",
+        item.id
       ] }),
-      /* @__PURE__ */ jsx(Button, { variant: "ghost", onClick: () => setOpen(new Set(items.map((a) => a.id))), children: "全部展开" }),
-      /* @__PURE__ */ jsx(Button, { variant: "ghost", onClick: () => setOpen(/* @__PURE__ */ new Set()), children: "全部收起" })
+      /* @__PURE__ */ jsx(Button, { onClick: () => nav == null ? void 0 : nav.jump({ area: "achievements", sub: "graph" }, "graph-achievement", item.id), children: "查看关联图" })
     ] }),
-    items.map((item) => {
-      var _a;
-      return /* @__PURE__ */ jsxs("div", { style: { border: "1px solid var(--border-subtle)", borderRadius: 6, marginBottom: 8, overflow: "hidden" }, children: [
-        /* @__PURE__ */ jsxs(
-          "button",
-          {
-            type: "button",
-            "aria-expanded": open.has(item.id),
-            onClick: () => toggle(item.id),
-            style: { width: "100%", border: 0, padding: "14px 12px", cursor: "pointer", background: "var(--bg-subtle)", color: "var(--fg-primary)", font: "inherit", textAlign: "left", display: "flex", gap: 12, flexWrap: "wrap", alignItems: "center" },
-            children: [
-              /* @__PURE__ */ jsx("span", { "aria-hidden": "true", children: open.has(item.id) ? "▾" : "▸" }),
-              /* @__PURE__ */ jsx("strong", { style: { flex: 1 }, children: item.name || "未命名成就" }),
-              /* @__PURE__ */ jsx("span", { style: { color: "var(--fg-secondary)", overflowWrap: "anywhere" }, children: item.id }),
-              /* @__PURE__ */ jsx("span", { children: ((_a = levels.find((l) => l.id === item.levelId)) == null ? void 0 : _a.name) ?? item.levelId })
-            ]
-          }
-        ),
-        open.has(item.id) && /* @__PURE__ */ jsxs("div", { style: { padding: 14 }, children: [
-          /* @__PURE__ */ jsxs(Section, { title: "基础配置", collapsible: true, defaultOpen: false, description: "各阶段可沿用这里的名称、说明、图标和等级，也可单独设置。", children: [
-            /* @__PURE__ */ jsxs("p", { style: { color: "var(--fg-secondary)" }, children: [
-              "成就编号：",
-              item.id,
-              "（供剧情调用，修改名称不会改变编号）"
-            ] }),
-            /* @__PURE__ */ jsx(FieldRow, { label: "名称", children: /* @__PURE__ */ jsx(TextInput, { value: item.name, onChange: (name) => patch(item, { name }) }) }),
-            /* @__PURE__ */ jsx(FieldRow, { label: "说明", children: /* @__PURE__ */ jsx(TextInput, { multiline: true, value: item.description ?? "", onChange: (description) => patch(item, { description }) }) }),
-            /* @__PURE__ */ jsx(FieldRow, { label: "图标", children: /* @__PURE__ */ jsx(AssetPicker, { accepts: ["image"], value: item.icon ?? "", onChange: (icon) => patch(item, { icon }) }) }),
-            /* @__PURE__ */ jsx(FieldRow, { label: "基础等级", children: /* @__PURE__ */ jsx(Select$1, { value: item.levelId, options: levels.map((l) => ({ value: l.id, label: l.name })), onChange: (levelId) => patch(item, { levelId }) }) })
-          ] }),
-          /* @__PURE__ */ jsx(Section, { title: "展示阶段", collapsible: true, defaultOpen: false, children: /* @__PURE__ */ jsx(AchievementStageEditor, { item, setInitial: (initialStageId) => patch(item, { initialStageId }) }) }),
-          /* @__PURE__ */ jsx("div", { style: { display: "flex", gap: 8, marginTop: 16 }, children: removeId === item.id ? /* @__PURE__ */ jsxs(Fragment, { children: [
-            /* @__PURE__ */ jsx("span", { children: "移除成就配置？已有玩家阶段记录会保留。" }),
-            /* @__PURE__ */ jsx(Button, { variant: "danger", onClick: () => {
-              if (save(items.filter((a) => a.id !== item.id))) setRemoveId("");
-            }, children: "确认移除" }),
-            /* @__PURE__ */ jsx(Button, { onClick: () => setRemoveId(""), children: "取消" })
-          ] }) : /* @__PURE__ */ jsx(Button, { variant: "ghost", onClick: () => setRemoveId(item.id), children: "移除成就" }) })
-        ] })
-      ] }, item.id);
-    }),
-    /* @__PURE__ */ jsx(FieldRow, { label: "新成就编号（可留空）", description: "留空自动生成。自填时使用字母、数字、点、横线或下划线；创建后保持稳定。", children: /* @__PURE__ */ jsx(TextInput, { value: newId, onChange: setNewId, placeholder: "例如 first_step" }) }),
-    /* @__PURE__ */ jsx(Button, { disabled: items.length >= 1e4, onClick: () => {
-      var _a;
-      const id2 = newId.trim() || "achievement_" + crypto.randomUUID();
-      if (!/^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/.test(id2)) {
-        setError("成就编号格式无效。");
-        return;
-      }
-      if (items.some((a) => a.id === id2)) {
-        setError("这个成就编号已经存在。");
-        return;
-      }
-      const stages = resolveStages(id2, configuredStages, stageOverrides);
-      if (!stages.length) {
-        setError("此编号保留的阶段配置没有可用阶段，请使用新编号或先恢复阶段配置。");
-        return;
-      }
-      const next = { id: id2, name: "新成就", description: "", icon: "", levelId: levels[0].id, initialStageId: ((_a = stages.find((s) => s.id === "unknown")) == null ? void 0 : _a.id) ?? stages[0].id };
-      if (save([...items, next])) {
-        setOpen((previous) => /* @__PURE__ */ new Set([...previous, id2]));
-        setNewId("");
-      }
-    }, children: "添加成就" }),
-    error && /* @__PURE__ */ jsx("p", { role: "alert", children: error })
+    /* @__PURE__ */ jsx(Tabs, { value: tab, onChange: setTab, items: [{ id: "stages", name: "阶段" }, { id: "base", name: "基础资料" }] }),
+    tab === "base" ? /* @__PURE__ */ jsxs(Section, { title: "基础资料", description: "供阶段沿用的名称、说明、图标和等级。", children: [
+      /* @__PURE__ */ jsx(FieldRow, { label: "名称", children: /* @__PURE__ */ jsx(TextInput, { required: true, value: item.name, onChange: (name) => patch({ name }) }) }),
+      /* @__PURE__ */ jsx(FieldRow, { label: "说明", children: /* @__PURE__ */ jsx(TextInput, { multiline: true, value: item.description ?? "", onChange: (description) => patch({ description }) }) }),
+      /* @__PURE__ */ jsx(FieldRow, { label: "图标", children: /* @__PURE__ */ jsx(AssetPicker, { accepts: ["image"], value: item.icon ?? "", onChange: (icon) => patch({ icon }) }) }),
+      /* @__PURE__ */ jsx(FieldRow, { label: "基础等级", children: /* @__PURE__ */ jsx(Select, { disabled: !!resolved.level, value: resolved.level || item.levelId, options: levels.map((l) => ({ value: l.id, label: l.name })), onChange: (levelId) => patch({ levelId }) }) }),
+      /* @__PURE__ */ jsx(AchievementGroups, { item })
+    ] }) : /* @__PURE__ */ jsx(AchievementStageEditor, { item: resolved.level ? { ...item, levelId: resolved.level } : item, setInitial: (initialStageId) => patch({ initialStageId }) })
   ] });
 }
-function useStages(id2) {
-  const [items] = useSetting("main.achievements");
-  const [saved] = useSetting("main.displayStages");
-  const [defaults] = useSetting("main.defaultStages");
-  if (!id2 || !(items == null ? void 0 : items.some((item) => item.id === id2))) return [];
-  return resolveStages(id2, defaults, saved);
-}
-function AchievementChoice() {
-  const [items] = useSetting("main.achievements");
-  const [id2, setId, info] = useParam("achievementId");
-  const { readOnly } = useInspectorEnvironment();
-  const [manual, setManual] = useState(false);
-  return /* @__PURE__ */ jsxs(Fragment, { children: [
-    /* @__PURE__ */ jsx(FieldRow, { label: "选择成就", description: !(items == null ? void 0 : items.length) ? "先在局内成就系统配置页添加成就。" : void 0, children: /* @__PURE__ */ jsx(
-      Select$1,
-      {
-        value: info.isVariable ? "" : id2 ?? "",
-        disabled: readOnly,
-        onChange: setId,
-        options: [{ value: "", label: info.isVariable ? "当前使用变量" : "请选择成就", disabled: true }, ...id2 && !(items == null ? void 0 : items.some((a) => a.id === id2)) ? [{ value: id2, label: `未找到：${id2}` }] : [], ...(items ?? []).map((a) => ({ value: a.id, label: `${a.name || "未命名"}（${a.id}）` }))]
-      }
-    ) }),
-    /* @__PURE__ */ jsx(Button, { variant: "ghost", onClick: () => setManual(!manual), children: manual ? "收起编号／变量输入" : "按编号或变量指定" }),
-    (manual || info.isVariable) && /* @__PURE__ */ jsx(ParamField, { name: "achievementId" })
-  ] });
-}
-function StageChoice({ name, optional = false }) {
-  const [achievementId, , achievementInfo] = useParam("achievementId");
-  const [value, setValue, info] = useParam(name);
-  const { readOnly } = useInspectorEnvironment();
-  const [manual, setManual] = useState(false);
-  const stages = useStages(achievementId);
-  if (achievementInfo.isVariable || !achievementId || info.isVariable || manual) return /* @__PURE__ */ jsxs(Fragment, { children: [
-    /* @__PURE__ */ jsx(ParamField, { name }),
-    manual && /* @__PURE__ */ jsx(Button, { variant: "ghost", onClick: () => setManual(false), children: "返回阶段选择" })
-  ] });
-  const missing = !!value && !stages.some((stage) => stage.id === value);
-  return /* @__PURE__ */ jsxs(Fragment, { children: [
-    /* @__PURE__ */ jsx(
-      FieldRow,
-      {
-        label: optional ? "仅在此阶段执行" : "目标展示阶段",
-        description: !stages.length ? "请先选择配置中存在的成就。" : missing ? `原阶段编号 ${value} 不属于此成就或已被移除，请重新选择。原参数尚未修改。` : "只列出所选成就的阶段。",
-        children: /* @__PURE__ */ jsx(Select$1, { value: value ?? "", placeholder: "请选择有效阶段", disabled: readOnly || !stages.length, onChange: setValue, options: [
-          { value: "", label: optional ? "不限制" : "请选择阶段", disabled: !optional },
-          ...stages.map((s) => ({ value: s.id, label: `${s.name}（${s.id}）` }))
-        ] })
-      }
-    ),
-    /* @__PURE__ */ jsx(Button, { variant: "ghost", onClick: () => setManual(true), children: "按阶段编号或变量指定" })
-  ] });
-}
-function OperationInspector() {
-  const [expected, , expectedInfo] = useParam("expectedStageId");
-  const [advanced, setAdvanced] = useState(false);
-  return /* @__PURE__ */ jsxs(Fragment, { children: [
-    /* @__PURE__ */ jsx(AchievementChoice, {}),
-    /* @__PURE__ */ jsx(StageChoice, { name: "stageId" }),
-    /* @__PURE__ */ jsx(ParamField, { name: "notify" }),
-    /* @__PURE__ */ jsx(Button, { variant: "ghost", onClick: () => setAdvanced(!advanced), children: advanced ? "收起阶段限制" : "设置执行前的阶段限制（可选）" }),
-    (advanced || expected || expectedInfo.isVariable) && /* @__PURE__ */ jsx(StageChoice, { name: "expectedStageId", optional: true }),
-    /* @__PURE__ */ jsx("p", { children: "只切换当前展示阶段；相同阶段不重复浮现。阶段限制不匹配时跳过，界面通常自动刷新。" })
-  ] });
-}
-function ReadInspector() {
-  return /* @__PURE__ */ jsxs(Fragment, { children: [
-    /* @__PURE__ */ jsx(AchievementChoice, {}),
-    /* @__PURE__ */ jsx(ParamField, { name: "field" }),
-    /* @__PURE__ */ jsx("p", { children: "返回当前阶段或等级的文本。条件建议比较稳定编号；当前等级由本阶段配置决定。" })
-  ] });
-}
-const inspectors = { "change-stage": OperationInspector, "stage-info": ReadInspector };
+const inspectors = { "group-visibility": GroupVisibilityInspector, "change-stage": OperationInspector, "stage-info": ReadInspector, "notification-mode": NotificationModeInspector, "open-page": OpenPageInspector, refresh: RefreshInspector };
 function Browsing() {
   const [playerChoice] = useSetting("main.allowPlayerSwitch");
   const [paged, setPaged] = useSetting("main.allowPagination");
@@ -5427,7 +7091,7 @@ function Browsing() {
     { label: "横向滚动", value: horizontal === true, set: setHorizontal }
   ];
   return /* @__PURE__ */ jsxs(Fragment, { children: [
-    /* @__PURE__ */ jsx("p", { style: { color: "var(--fg-secondary)" }, children: "默认翻页／滚动只在官方编辑器设置：打开成就页，单击“双击编辑卡片 · 成就列表”，关闭“滚动模式”就是翻页，开启就是滚动。保存后重新打开游戏中的成就页生效。" }),
+    /* @__PURE__ */ jsx("p", { style: { color: "var(--fg-secondary)" }, children: "官方编辑器 → 成就页 → 单击成就列表：设置行列、间距和大小。“滚动模式”关闭为翻页，开启为滚动。" }),
     /* @__PURE__ */ jsx(SettingField, { name: "main.scrollDirection" }),
     /* @__PURE__ */ jsx(SettingField, { name: "main.allowPlayerSwitch" }),
     playerChoice === true && /* @__PURE__ */ jsxs(Fragment, { children: [
@@ -5443,9 +7107,8 @@ function Browsing() {
         ),
         mode2.label
       ] }, mode2.label)) }),
-      /* @__PURE__ */ jsx("p", { style: { color: "var(--fg-secondary)" }, children: "官方页面的默认方式始终可用；勾选项仅增加可选方式。只有两种以上方式时才显示切换按钮，玩家已有且仍开放的选择优先。" })
-    ] }),
-    /* @__PURE__ */ jsx("p", { style: { color: "var(--fg-secondary)" }, children: "行、列、间距和列表大小也在官方编辑器设置。这里仅补充滚动方向和玩家切换权限。" })
+      /* @__PURE__ */ jsx("p", { style: { color: "var(--fg-secondary)" }, children: "页面默认方式始终可用；有两种以上方式时显示切换按钮。" })
+    ] })
   ] });
 }
 function Validation() {
@@ -5456,10 +7119,12 @@ function Validation() {
   const [appearances] = useSetting("main.appearances");
   const [elementCss] = useSetting("main.elementCss");
   const [presentations] = useSetting("main.stagePresentations");
+  const [groups] = useSetting("main.groupCatalog");
+  const [tiers] = useSetting("main.stageTiers");
   let message;
   let invalid = false;
   try {
-    const value = catalog((levels == null ? void 0 : levels.length) ? levels : DEFAULT_LEVELS, items ?? [], stages ?? [], defaults ?? [], appearances ?? [], elementCss ?? [], presentations ?? []);
+    const value = catalog((levels == null ? void 0 : levels.length) ? levels : DEFAULT_LEVELS, items ?? [], stages ?? [], defaults ?? [], appearances ?? [], elementCss ?? [], presentations ?? [], groups ?? [], tiers ?? []);
     message = `${value.achievements.length} 个成就，${value.levels.length} 个等级。`;
   } catch (error) {
     invalid = true;
@@ -5467,27 +7132,32 @@ function Validation() {
   }
   return /* @__PURE__ */ jsx("p", { role: invalid ? "alert" : "status", style: { color: invalid ? "var(--warn)" : "var(--fg-secondary)" }, children: message });
 }
-function settingsPage() {
-  return /* @__PURE__ */ jsxs(Panel, { children: [
-    /* @__PURE__ */ jsxs(Section, { title: "成就管理", collapsible: true, description: "点击成就展开基础内容与展示阶段；每条成就可独立收起。游戏中只记录当前阶段。", children: [
-      /* @__PURE__ */ jsx(Validation, {}),
-      /* @__PURE__ */ jsx(AchievementEditor, {})
+function Workbench() {
+  const nav = useNavigation();
+  const { area, sub } = nav.route;
+  const section = area === "attributes" ? ["defaults", "groups"].includes(sub) ? sub : "levels" : ["page", "cards", "popups"].includes(sub) ? sub : "page";
+  return /* @__PURE__ */ jsxs("div", { className: "aw-root", children: [
+    /* @__PURE__ */ jsx("style", { children: workbenchStyle }),
+    /* @__PURE__ */ jsxs("header", { className: "aw-top", children: [
+      /* @__PURE__ */ jsx("h2", { children: "局内成就系统 · 创作工作台" }),
+      /* @__PURE__ */ jsx(Tabs, { value: area, onChange: (next) => nav.go({ area: next, sub: next === "attributes" ? "levels" : "page" }), items: [{ id: "achievements", name: "成就" }, { id: "attributes", name: "属性配置" }, { id: "interfaces", name: "界面与浮现" }] }),
+      /* @__PURE__ */ jsx(SaveStatus, {}),
+      nav.canBack && /* @__PURE__ */ jsx(Button, { onClick: nav.back, children: nav.backLabel })
     ] }),
-    /* @__PURE__ */ jsxs(Section, { title: "通用配置", collapsible: true, defaultOpen: false, description: "统一维护等级、默认阶段，以及通用卡片展示和通用浮现方案。", children: [
-      /* @__PURE__ */ jsx(Section, { title: "成就等级", collapsible: true, defaultOpen: false, description: "统一配置可供成就和阶段选择的等级。未配置时使用铜、银、金。", children: /* @__PURE__ */ jsx(LevelAppearanceEditor, {}) }),
-      /* @__PURE__ */ jsx(SharedPresentationEditor, { surface: "card" }),
-      /* @__PURE__ */ jsx(SharedPresentationEditor, { surface: "popup" }),
-      /* @__PURE__ */ jsx(Section, { title: "默认阶段配置", collapsible: true, defaultOpen: false, description: "共用的阶段配置。成就默认沿用这里；在单个成就下修改后，仅该成就使用专用配置。", children: /* @__PURE__ */ jsx(DefaultStageEditor, {}) })
-    ] }),
-    /* @__PURE__ */ jsxs(Section, { title: "界面与播放", collapsible: true, defaultOpen: false, description: "成就页的编排、浏览方式和全局浮现播放开关；通用表现到通用配置管理。", children: [
-      /* @__PURE__ */ jsxs(Section, { title: "成就页与卡片编排", collapsible: true, defaultOpen: false, description: "默认翻页／滚动与页面编排统一在官方 UI 编辑器设置；这里补充滚动方向和玩家切换权限。通过“打开成就页”进入游戏界面。", children: [
-        /* @__PURE__ */ jsx(SettingField, { name: "main.page" }),
-        /* @__PURE__ */ jsx(Browsing, {}),
-        /* @__PURE__ */ jsx(CardLayoutEditor, {})
-      ] }),
-      /* @__PURE__ */ jsx(Section, { title: "浮现播放", collapsible: true, defaultOpen: false, description: "全局允许播放后，各阶段自行决定是否浮现。连续通知内置排队，依次播放；相同阶段不重复播放。", children: /* @__PURE__ */ jsx(SettingField, { name: "main.notifications" }) })
-    ] })
+    /* @__PURE__ */ jsx(Validation, {}),
+    area !== "achievements" && /* @__PURE__ */ jsx(Tabs, { value: section, onChange: (next) => nav.go({ area, sub: next }), items: area === "attributes" ? [{ id: "levels", name: "等级" }, { id: "defaults", name: "默认阶段" }, { id: "groups", name: "分组" }] : [{ id: "page", name: "成就页" }, { id: "cards", name: "卡片" }, { id: "popups", name: "浮现" }] }),
+    /* @__PURE__ */ jsx(EditorScope, { id: area + "/" + section, children: area === "achievements" ? sub === "graph" ? /* @__PURE__ */ jsx(RelationGraph, {}) : /* @__PURE__ */ jsx(AchievementEditor, {}) : area === "attributes" ? section === "groups" ? /* @__PURE__ */ jsx(GroupEditor, {}) : section === "defaults" ? /* @__PURE__ */ jsx(DefaultStageEditor, {}) : /* @__PURE__ */ jsx(LevelAppearanceEditor, {}) : sub === "reference" ? /* @__PURE__ */ jsx(RelationInterface, {}) : section === "page" ? /* @__PURE__ */ jsxs(Section, { title: "成就页", description: "页面与卡片几何由官方 UI 编辑器管理。", children: [
+      /* @__PURE__ */ jsx(SettingField, { name: "main.page" }),
+      /* @__PURE__ */ jsx(SettingField, { name: "main.allowGroupFilter" }),
+      /* @__PURE__ */ jsx(Browsing, {})
+    ] }) : /* @__PURE__ */ jsx(SharedPresentationEditor, { surface: section === "cards" ? "card" : "popup" }) }, area + section)
   ] });
+}
+function settingsPage() {
+  return /* @__PURE__ */ jsx(EditorSession, { children: /* @__PURE__ */ jsxs(EditorNavigation, { children: [
+    /* @__PURE__ */ jsx("style", { children: workbenchStyle }),
+    /* @__PURE__ */ jsx(WorkbenchScale, { children: /* @__PURE__ */ jsx(Workbench, {}) })
+  ] }) });
 }
 export {
   inspectors,

@@ -2,6 +2,7 @@ import { parsePresentations, projectPresentation, type StagePresentation, type S
 import { optionalAppearance, type CardAppearance } from './card-style.ts';
 import { parseAppearanceBinding, parsePresetOptions, resolveAppearance, type AppearanceBinding, type AppearancePreset } from './appearance-presets.ts';
 import { parseCssRecords, resolveElementCss, type CssOwner, type ElementCssLayer, type ElementCssRecord } from './element-css.ts';
+import { effectiveDefaults, canGainStage, resolveTiers, validateGroups, type GroupRow, type TierRow } from './groups.ts';
 export interface Level { id: string; name: string; appearanceId?: string; popupAppearanceId?: string }
 export interface Achievement { id: string; name: string; description: string; icon: string; levelId: string; initialStageId: string }
 export type ContentMode = 'base' | 'custom' | 'none';
@@ -15,9 +16,10 @@ export interface StageTemplate extends Partial<CardAppearance>, AppearanceBindin
 }
 export interface DisplayStage extends StageTemplate { achievementId: string; disabled?: boolean }
 export interface StageRecord { id: string; stageId: string }
+export interface SteamStageBinding { achievementId: string; stageId: string; apiName: string }
 // A whitelist, not a spread of author data: no unrevealed fields/stage definitions reach cards.
 export interface Entry { id: string; name: string; description: string; icon: string; iconMode: DisplayStage['iconMode']; levelId: string; levelName: string; stageId: string; stageName: string; appearance?: Partial<CardAppearance>; elementCss?: ElementCssLayer[]; popupUI?: string; popupDurationMs?: number }
-export interface Catalog { levels: Level[]; achievements: Achievement[]; stages: DisplayStage[]; defaultStages: StageTemplate[]; appearances?: AppearancePreset[]; elementCss?: ElementCssRecord[]; presentations?: StagePresentation[] }
+export interface Catalog { groups?: GroupRow[]; tiers?: TierRow[]; levels: Level[]; achievements: Achievement[]; stages: DisplayStage[]; defaultStages: StageTemplate[]; appearances?: AppearancePreset[]; elementCss?: ElementCssRecord[]; presentations?: StagePresentation[] }
 
 export class AchievementError extends Error {
   constructor(readonly code: string, message: string) { super(message); this.name = 'AchievementError'; }
@@ -62,13 +64,14 @@ function mode(value: unknown, icon = false): ContentMode | 'unknown' {
   if (result === 'base' || result === 'custom' || result === 'none' || (icon && result === 'unknown')) return result;
   throw new AchievementError('INVALID_DATA', '阶段内容来源无效');
 }
-export function catalog(levelValues: unknown, achievementValues: unknown, stageValues: unknown = [], defaultStageValues: unknown = [], appearanceValues: unknown = [], cssValues: unknown = [], presentationValues: unknown = []): Catalog {
+export function catalog(levelValues: unknown, achievementValues: unknown, stageValues: unknown = [], defaultStageValues: unknown = [], appearanceValues: unknown = [], cssValues: unknown = [], presentationValues: unknown = [], groups: GroupRow[] = [], tiers: TierRow[] = []): Catalog {
+  validateGroups(groups);
   const appearances = unique(rows(appearanceValues).map(value => { const row = object(value); return { ...optionalAppearance(row), ...parsePresetOptions(row), id: id(row.id), name: text(row.name, '外观名称') }; }), '共用外观');
   for (const surface of ['card', 'popup']) if (appearances.filter(p => p.isDefault && p.surface === surface).length > 1) throw new AchievementError('INVALID_DATA', '每组只能有一个默认表现方案');
   const levels = unique(rows(levelValues).map(value => { const row = object(value); return { id: id(row.id), name: text(row.name, '等级名称'), ...(row.appearanceId ? { appearanceId: id(row.appearanceId) } : {}), ...(row.popupAppearanceId ? { popupAppearanceId: id(row.popupAppearanceId) } : {}) }; }), '等级');
   const achievements = unique(rows(achievementValues).map(value => {
     const row = object(value);
-    const achievement: Achievement = { id: id(row.id), name: text(row.name, '成就名称'), description: text(row.description ?? '', '成就说明', true), icon: text(row.icon ?? '', '图标', true), levelId: id(row.levelId), initialStageId: row.initialStageId ? id(row.initialStageId) : 'unknown' };
+    const achievement: Achievement = { id: id(row.id), name: text(row.name, '成就名称'), description: text(row.description ?? '', '成就说明', true), icon: text(row.icon ?? '', '图标', true), levelId: id(effectiveDefaults(groups, id(row.id)).level || row.levelId), initialStageId: row.initialStageId ? id(row.initialStageId) : 'unknown' };
     if (!levels.some(level => level.id === achievement.levelId)) throw new AchievementError('LEVEL_NOT_FOUND', `成就 ${achievement.id} 的等级不存在`);
     return achievement;
   }), '成就');
@@ -93,7 +96,7 @@ export function catalog(levelValues: unknown, achievementValues: unknown, stageV
     return { ...parseStage(row), achievementId, disabled: false };
   });
   if (new Set(stages.map(s => s.achievementId + '/' + s.id)).size !== stages.length) throw new AchievementError('DUPLICATE_ID', '同一成就的阶段编号重复');
-  const result = { levels, achievements, stages, defaultStages, appearances, elementCss: parseCssRecords(cssValues), presentations: parsePresentations(presentationValues) };
+  const result = { groups, tiers, levels, achievements, stages, defaultStages, appearances, elementCss: parseCssRecords(cssValues), presentations: parsePresentations(presentationValues) };
   for (const item of achievements) if (item.initialStageId && !stagesFor(result, item.id).some(s => s.id === item.initialStageId)) throw new AchievementError('STAGE_NOT_FOUND', `成就 ${item.id} 的初始阶段不存在`);
   // Orphan stage definitions are retained for temporarily removed achievements.
   return result;
@@ -127,7 +130,7 @@ export function currentStage(definitions: Catalog, records: readonly StageRecord
 export function stageRecords(value: unknown): StageRecord[] {
   return unique(rows(value).map(value => {
     const row = object(value);
-    if (typeof row.stageId !== 'string' || !row.stageId.trim()) throw new AchievementError('INVALID_DATA', '记录缺少展示阶段编号，请使用新版阶段记录表');
+    if (typeof row.stageId !== 'string' || !row.stageId.trim()) throw new AchievementError('INVALID_DATA', '记录缺少展示阶段编号');
     return { id: id(row.id), stageId: id(row.stageId) };
   }), '阶段记录');
 }
@@ -154,11 +157,16 @@ export function stageCssOwners(stage: StageTemplate, item: Pick<Achievement, 'id
 export function setDisplayStage(definitions: Catalog, records: readonly StageRecord[], achievementId: string, target: string, expected = '') {
   if (typeof expected !== 'string') throw new AchievementError('INVALID_DATA', '预期阶段必须为文本');
   const previous = currentStage(definitions, records, achievementId);
-  if (!stagesFor(definitions, achievementId).some(s => s.id === target)) throw new AchievementError('STAGE_NOT_FOUND', `找不到展示阶段：${target}`);
+  const stages = stagesFor(definitions, achievementId);
+  if (!stages.some(s => s.id === target)) throw new AchievementError('STAGE_NOT_FOUND', `找不到展示阶段：${target}`);
   if (expected && previous !== expected) return { changed: false, matched: false, records: records.map(r => ({ ...r })) };
+  const acquired = records.find(row => row.id === achievementId);
+  const tiers = resolveTiers(achievementId, (definitions.tiers ?? []).filter(row => row.achievementId === achievementId), stages);
+  if (!canGainStage(tiers, target, acquired?.stageId)) return { changed: false, matched: false, records: [...records] };
+  const firstTier = !acquired && tiers.length > 0;
   const next = records.filter(r => r.id !== achievementId).map(r => ({ ...r }));
   next.push({ id: achievementId, stageId: target });
-  return { changed: previous !== target, matched: true, records: next };
+  return { changed: previous !== target || !!firstTier, matched: true, records: next };
 }
 
 export type ReadField = 'stageId' | 'stageName' | 'levelId' | 'levelName';

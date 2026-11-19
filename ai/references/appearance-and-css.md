@@ -6,7 +6,7 @@
 
 卡片内部统一使用官方手动模板，不提供编排模式选择和自动图文布局。扩展不自动重排位置、大小、字号或行数；阶段普通外观应用背景、边框、动效并测量尺寸参考，创作者另可显式使用元素 CSS 覆盖内容层样式。
 
-main.appearances 为统一存储的通用表现方案数组，界面分成“通用卡片展示”和“通用浮现”，不再显示独立共用外观入口。每项为 {id,name,surface,isDefault,...外观字段,nameMode,descriptionMode,iconMode,levelVisibility,stageNameVisibility,ui,durationMs}；surface=card|popup，每组最多一个 isDefault=true。名称／说明显示模式为 stage|none，图标另支持 unknown；不保存具体成就文字。levelVisibility/stageNameVisibility=stage|show|hide。浮现 ui 和 durationMs 决定通用界面、时长，0／空值回退原 main.popup/main.durationMs。卡片布局仍使用成就页的原生 card 模板，不按方案切换独立模板文档。
+main.appearances 为统一存储的通用表现方案数组，界面分成“卡片方案”和“浮现方案”，不再显示独立共用外观入口。每项为 {id,name,surface,isDefault,...外观字段,nameMode,descriptionMode,iconMode,levelVisibility,stageNameVisibility,ui,durationMs}；surface=card|popup，每组最多一个 isDefault=true。名称／说明显示模式为 stage|none，图标另支持 unknown；不保存具体成就文字。levelVisibility/stageNameVisibility=stage|show|hide。浮现 ui 和 durationMs 决定通用界面、时长，0／空值回退原 main.popup/main.durationMs。卡片布局仍使用成就页的原生 card 模板，不按方案切换独立模板文档。
 
 appearanceSource=default|local|preset|level。没有专用外观的阶段默认 default，引用对应 surface 的默认方案；local 完全独立，preset 使用 appearanceId，level 按有效等级读取卡片 appearanceId 或浮现 popupAppearanceId。跨 surface 的引用不应用外观或 CSS。overrideBackground/overrideFrame/overrideEffects 默认 false；default/preset/level 下按整个分段覆盖，关闭恢复实时跟随。具体阶段值不复制整套通用方案形成另一份来源；仅首次开启覆盖时捕获该分段。已有专用外观保持原值。
 
@@ -37,7 +37,7 @@ open-page 通过 ctx.extensionResource.url('ui/<name>.json') 读取本扩展自�
 
 原生单卡编辑器沿用双击列表入口，可在取消元素选中后的“界面属性 → 设计画布”修改宽高，不需要独立界面。修改画布不自动缩放或重排已有元素。当前设计宽高保存在 card 模板组的 rect.w/h；MCP 读取以 template.canvas 为准，templates[].canvas 是参考表。240×280不是固定尺寸或已确认的固定下限。列表行列、间距及区域变化目前不会自动更新该设计画布；扩展公开编辑期 SDK 未找到列表文档变更订阅／模板持久写回接口。Agent 的 ui_edit 能修改工程，不等同于发行插件自动能力。
 
-尺寸参考位于“界面与播放 → 成就页与卡片编排 → 成就卡片编排”。通过 open-page 打开的剧情预览测量实际单卡占位，并经公开 ctx.settings.set 写入 main.cardSizeReference（最多一条结构化记录）；配置页 useSetting 读取同一记录。包含页面、测量时间、浏览方式、实际占位／内容／网格宽高及作者行列、间距、列表和模板画布宽高。该记录只供作者参考，不参与布局和成就状态；Player 中设置写入仅在运行内存生效。尺寸变化去重并延迟250ms写入，页面关闭时撤销等待。换页面不显示其他页面的缓存；没有可见卡片或模板不支持时不生成新值。修改官方布局后须通过方法重新打开剧情预览，不能把旧时间的记录当成即时同步。建议画布与全卡背景／边框控件采用测得的占位尺寸，内部元素手动摆放；不改作者模板。
+尺寸参考位于“界面与浮现 → 卡片 → 成就卡片编排”。通过 open-page 打开的剧情预览测量实际单卡占位，并经公开 ctx.settings.set 写入 main.cardSizeReference（最多一条结构化记录）；配置页 useSetting 读取同一记录。包含页面、测量时间、浏览方式、实际占位／内容／网格宽高及作者行列、间距、列表和模板画布宽高。该记录只供作者参考，不参与布局和成就状态；Player 中设置写入仅在运行内存生效。尺寸变化去重并延迟250ms写入，页面关闭时撤销等待。换页面不显示其他页面的缓存；没有可见卡片或模板不支持时不生成新值。修改官方布局后须通过方法重新打开剧情预览，不能把旧时间的记录当成即时同步。建议画布与全卡背景／边框控件采用测得的占位尺寸，内部元素手动摆放；不改作者模板。
 
 装饰锚点／最小最大尺寸、逐元素行数和完整属性标签映射仍待补充。配置页直达编辑器仍待后续，不作为画布跟随的前置。
 
@@ -49,7 +49,7 @@ main.elementCss 为结构化配置数组（最多 10000 行），每行 {id,owne
 
 解析顺序为阶段实际引用的外观、同编号默认阶段、当前成就阶段；各层先 both 后对应 surface。replace 清除该元素已累计的上级 CSS，空 replace 行可停用继承。阶段基础内容按完整阶段规则处理，卡片与浮现外观分别解析；CSS 单独按上述层级叠加，不继承前一个运行阶段。无对应实际阶段的 CSS 记录不参与投影。
 
-配置页默认显示沿用摘要，点击单独设置才展开内容或外观参数；提供保存前解析、覆盖属性列表、动效冲突提示和恢复继承。CSS 可写根声明、本元素状态与伪元素、& img、根级 @keyframes，不允许其它全局／嵌套规则、外部 URL、表达式或 --achievement-* 内部标记。保存草稿用“应用 CSS”；不能解析时保留草稿并阻止切换元素／用途。
+CSS 使用元素列表和代码区，显示 owner、使用位置与继承状态。CSS 支持根声明、本元素状态与伪元素、& img、根级 @keyframes；不允许全局选择器、外部 URL 或内部标记。约 500ms 校验提交，非法草稿可跨元素切换保留，只在本次会话有效。恢复某元素不恢复其他内容或表现。
 
 运行时给目标内容层唯一作用域并为关键帧改名，不写作者 UI 文件。普通根声明以 important 覆盖基础属性；参与关键帧的属性保留动画优先级。文字色彩／字体等同时覆盖原生文字 paint span。hover-only CSS 保留普通静止样式；关闭时移除作用域、样式表并恢复仍由适配器拥有的内联值。CSS 接管 animation/transition 或内置动效对应的 transform/opacity/filter 时只暂停该元素的内置附加动效。减少动画的媒体条件停用 CSS 动画与过渡。CSS 动画不继承内置动效的 loop/enter/hover 设置。
 
